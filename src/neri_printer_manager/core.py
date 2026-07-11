@@ -1,12 +1,14 @@
 """Serviços centrais do Neri Printer Manager.
 
 A camada não depende da interface gráfica. Isso facilita testes, uso pela CLI e
-futuras interfaces. Comandos são executados sem shell para evitar injeção.
+futuras interfaces. Comandos são executados sem shell para reduzir o risco de
+injeção e sempre passam por validação centralizada.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from enum import StrEnum
+from enum import Enum
 import json
 import logging
 from pathlib import Path
@@ -14,11 +16,11 @@ import re
 import shutil
 import socket
 import subprocess
-from collections.abc import Sequence
 from urllib.parse import urlparse
 
 LOG = logging.getLogger(__name__)
 _QUEUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$")
+_JOB_RE = re.compile(r"^[A-Za-z0-9_.-]+-[0-9]+$")
 _ALLOWED_SCHEMES = {"ipp", "ipps", "http", "https", "socket", "lpd", "smb", "usb"}
 
 
@@ -26,7 +28,7 @@ class PrinterManagerError(RuntimeError):
     """Erro esperado que pode ser exibido diretamente ao usuário."""
 
 
-class Severity(StrEnum):
+class Severity(str, Enum):
     OK = "ok"
     WARNING = "warning"
     ERROR = "error"
@@ -39,6 +41,14 @@ class Printer:
     enabled: bool
     accepting: bool
     device_uri: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PrintJob:
+    job_id: str
+    owner: str
+    size: str
+    submitted: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,12 +67,27 @@ class DiagnosticItem:
     remediation: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CommandResult:
+    args: tuple[str, ...]
+    returncode: int
+    stdout: str
+    stderr: str
+
+
 def validate_queue_name(value: str) -> str:
     value = value.strip()
     if not _QUEUE_RE.fullmatch(value):
         raise PrinterManagerError(
             "Nome de fila inválido. Use letras, números, ponto, hífen ou sublinhado."
         )
+    return value
+
+
+def validate_job_id(value: str) -> str:
+    value = value.strip()
+    if not _JOB_RE.fullmatch(value):
+        raise PrinterManagerError("Identificador de trabalho inválido.")
     return value
 
 
@@ -76,14 +101,6 @@ def validate_device_uri(value: str) -> str:
     if any(char in value for char in ("\n", "\r", "\x00")):
         raise PrinterManagerError("URI contém caracteres inválidos.")
     return value
-
-
-@dataclass(frozen=True, slots=True)
-class CommandResult:
-    args: tuple[str, ...]
-    returncode: int
-    stdout: str
-    stderr: str
 
 
 class CommandRunner:
@@ -110,7 +127,7 @@ class CommandRunner:
             if not self.exists("pkexec"):
                 raise PrinterManagerError("pkexec não está instalado.")
             command.insert(0, "pkexec")
-        LOG.info("Executando: %s", " ".join(command))
+        LOG.info("Executando comando: %s", command[0])
         try:
             completed = subprocess.run(
                 command,
@@ -204,6 +221,32 @@ class CupsService:
         self.runner.run(
             ["lp", "-d", validate_queue_name(name), "/usr/share/cups/data/testprint"]
         )
+
+
+class JobService:
+    """Consulta e cancela trabalhos de impressão."""
+
+    def __init__(self, runner: CommandRunner | None = None) -> None:
+        self.runner = runner or CommandRunner()
+
+    def list_jobs(self) -> list[PrintJob]:
+        jobs: list[PrintJob] = []
+        result = self.runner.run(["lpstat", "-o"], check=False)
+        for line in result.stdout.splitlines():
+            parts = line.split(maxsplit=4)
+            if len(parts) >= 3:
+                jobs.append(
+                    PrintJob(
+                        job_id=parts[0],
+                        owner=parts[1],
+                        size=parts[2],
+                        submitted=" ".join(parts[3:]) if len(parts) > 3 else "",
+                    )
+                )
+        return jobs
+
+    def cancel(self, job_id: str) -> None:
+        self.runner.run(["cancel", validate_job_id(job_id)])
 
 
 class DiscoveryService:

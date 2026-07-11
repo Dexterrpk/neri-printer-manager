@@ -1,0 +1,82 @@
+"""Orquestra reparos seguros e verificáveis."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+
+from .core import CommandRunner, PrinterManagerError
+from .cups_filters import CupsFilterService, FilterFinding, RepairAction
+from .dependencies import DependencyService
+
+HELPER = Path("/usr/libexec/neri-printer-helper")
+
+
+class RepairStatus(str, Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class RepairResult:
+    action: str
+    status: RepairStatus
+    message: str
+
+
+class RepairService:
+    """Executa somente ações previstas no catálogo interno."""
+
+    def __init__(self, runner: CommandRunner | None = None) -> None:
+        self.runner = runner or CommandRunner(timeout=900)
+
+    def _helper(self, action: str, *args: str) -> None:
+        if not HELPER.exists():
+            raise PrinterManagerError(
+                "Helper administrativo não instalado. Reinstale o pacote do aplicativo."
+            )
+        self.runner.run(["pkexec", str(HELPER), action, *args], check=True)
+
+    def install_missing_dependencies(self, include_optional: bool = False) -> RepairResult:
+        missing = DependencyService().missing(include_optional=include_optional)
+        if not missing:
+            return RepairResult("dependencies", RepairStatus.SKIPPED, "Dependências já instaladas")
+        self._helper("install-packages", *missing)
+        remaining = DependencyService().missing(include_optional=include_optional)
+        if remaining:
+            return RepairResult(
+                "dependencies",
+                RepairStatus.FAILED,
+                f"Pacotes ainda ausentes: {', '.join(remaining)}",
+            )
+        return RepairResult("dependencies", RepairStatus.SUCCESS, "Dependências instaladas")
+
+    def repair_filter_finding(self, finding: FilterFinding) -> list[RepairResult]:
+        results: list[RepairResult] = []
+        packages = CupsFilterService.packages_for(finding.actions)
+        if packages:
+            try:
+                self._helper("reinstall-packages", *packages)
+                results.append(
+                    RepairResult("reinstall-packages", RepairStatus.SUCCESS, ", ".join(packages))
+                )
+            except PrinterManagerError as exc:
+                results.append(RepairResult("reinstall-packages", RepairStatus.FAILED, str(exc)))
+                return results
+        if RepairAction.RESTART_CUPS in finding.actions:
+            try:
+                self._helper("restart-cups")
+                results.append(RepairResult("restart-cups", RepairStatus.SUCCESS, "CUPS reiniciado"))
+            except PrinterManagerError as exc:
+                results.append(RepairResult("restart-cups", RepairStatus.FAILED, str(exc)))
+        post = CupsFilterService().diagnose()
+        if any(item.code == finding.code for item in post):
+            results.append(
+                RepairResult("verification", RepairStatus.FAILED, "Falha ainda presente após reparo")
+            )
+        else:
+            results.append(
+                RepairResult("verification", RepairStatus.SUCCESS, "Reparo verificado")
+            )
+        return results

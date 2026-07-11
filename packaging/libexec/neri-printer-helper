@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+"""Helper privilegiado com operações explicitamente permitidas.
+
+Este arquivo é instalado em /usr/libexec e chamado por pkexec. Ele nunca aceita
+um comando arbitrário: cada ação possui quantidade e formato de argumentos
+validados antes da execução.
+"""
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+from urllib.parse import urlparse
+
+QUEUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$")
+ALLOWED_SCHEMES = {"ipp", "ipps", "http", "https", "socket", "lpd", "smb", "usb"}
+
+
+def fail(message: str, code: int = 2) -> int:
+    print(message, file=sys.stderr)
+    return code
+
+
+def queue(value: str) -> str:
+    if not QUEUE_RE.fullmatch(value):
+        raise ValueError("nome de fila inválido")
+    return value
+
+
+def uri(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        raise ValueError("protocolo não permitido")
+    if parsed.scheme != "usb" and not parsed.netloc:
+        raise ValueError("URI incompleta")
+    return value
+
+
+def execute(command: list[str]) -> int:
+    completed = subprocess.run(command, check=False)
+    return completed.returncode
+
+
+def main(argv: list[str]) -> int:
+    if os.geteuid() != 0:
+        return fail("o helper precisa ser executado através do pkexec")
+    if len(argv) < 2:
+        return fail("ação não informada")
+    action, *args = argv[1:]
+    try:
+        if action == "add" and len(args) == 3:
+            name, device_uri, model = queue(args[0]), uri(args[1]), args[2]
+            if not model or len(model) > 200:
+                raise ValueError("modelo inválido")
+            return execute(["/usr/sbin/lpadmin", "-p", name, "-E", "-v", device_uri, "-m", model])
+        if action == "remove" and len(args) == 1:
+            return execute(["/usr/sbin/lpadmin", "-x", queue(args[0])])
+        if action == "pause" and len(args) == 1:
+            return execute(["/usr/sbin/cupsdisable", queue(args[0])])
+        if action == "resume" and len(args) == 1:
+            name = queue(args[0])
+            first = execute(["/usr/sbin/cupsenable", name])
+            return first or execute(["/usr/sbin/cupsaccept", name])
+    except ValueError as exc:
+        return fail(str(exc))
+    return fail("ação ou argumentos não permitidos")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

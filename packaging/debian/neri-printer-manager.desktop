@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Neri Printer Manager
+Comment=Gerencie e diagnostique impressoras no Linux Mint
+Exec=neri-printer-manager
+Icon=printer
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=printer;impressora;cups;rede;
+StartupNotify=true

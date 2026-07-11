@@ -4,6 +4,7 @@ from neri_printer_manager.core import (
     CommandRunner,
     PrinterManagerError,
     validate_device_uri,
+    validate_job_id,
     validate_queue_name,
 )
 
@@ -33,6 +34,16 @@ def test_supported_device_uris(value: str) -> None:
 def test_unknown_device_protocol_is_rejected() -> None:
     with pytest.raises(PrinterManagerError):
         validate_device_uri("file:///tmp/output")
+
+
+def test_valid_job_id() -> None:
+    assert validate_job_id("RECEPCAO-42") == "RECEPCAO-42"
+
+
+@pytest.mark.parametrize("value", ["", "42", "fila 1", "fila-1;rm"])
+def test_invalid_job_id_is_rejected(value: str) -> None:
+    with pytest.raises(PrinterManagerError):
+        validate_job_id(value)
 
 
 def test_command_runner_captures_output() -> None:

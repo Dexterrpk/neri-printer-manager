@@ -7,11 +7,12 @@ import json
 from pathlib import Path
 
 from .backup import BackupService
-from .core import CupsService, DiagnosticService, DiscoveryService, JobService, write_report
+from .core import CupsService, DiagnosticService, DiscoveryService, JobService
 from .cups_filters import CupsFilterService
 from .dependencies import DependencyService
 from .network import NetworkService
 from .repair import RepairService
+from .reports import ReportService
 from .sharing import SharingService
 
 
@@ -41,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     repair_deps.add_argument("--optional", action="store_true")
     report = commands.add_parser("report")
     report.add_argument("path", type=Path)
+    report.add_argument("--format", choices=("json", "html"), default="json")
+    support = commands.add_parser("support-bundle")
+    support.add_argument("destination", type=Path)
     return parser
 
 
@@ -78,8 +82,11 @@ def main() -> int:
     elif args.command == "repair-dependencies":
         dump(asdict(RepairService().install_missing_dependencies(args.optional)))
     elif args.command == "report":
-        write_report(args.path, cups.list_printers(), DiagnosticService().run_all())
-        print(args.path)
+        service = ReportService()
+        target = service.write_html(args.path) if args.format == "html" else service.write_json(args.path)
+        print(target)
+    elif args.command == "support-bundle":
+        print(ReportService().create_support_bundle(args.destination))
     return 0
 
 

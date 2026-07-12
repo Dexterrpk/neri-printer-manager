@@ -36,7 +36,7 @@ _SIGNATURES: tuple[tuple[re.Pattern[str], str, str, tuple[RepairAction, ...]], .
         re.compile(r"filter failed|stopped with status [^0]", re.IGNORECASE),
         "filter_failed",
         "Filtro falhou em trabalho recente",
-        (RepairAction.RESTART_CUPS,),
+        (RepairAction.REINSTALL_FILTERS, RepairAction.RESTART_CUPS),
     ),
     (
         re.compile(r"unable to open ppd|ppd.*(missing|not found|bad value)", re.IGNORECASE),
@@ -93,7 +93,6 @@ class CupsFilterService:
         return list(findings.values())
 
     def read_recent_errors(self, minutes: int = 30, lines: int = 250) -> str:
-        """Considera somente erros recentes, evitando reparar falhas antigas já resolvidas."""
         journal = self.runner.run(
             [
                 "journalctl", "-u", "cups.service", "--since", f"-{minutes} minutes",
@@ -106,8 +105,6 @@ class CupsFilterService:
         if error_log.is_file() and os.access(error_log, os.R_OK):
             try:
                 recent = error_log.read_text(errors="replace").splitlines()[-lines:]
-                # O error_log não possui um formato de data confiável em todas as versões;
-                # só adicionamos linhas marcadas como erro para reduzir falsos positivos.
                 chunks.append("\n".join(line for line in recent if re.search(r"\bE\s|\[Job \d+\].*(failed|error)", line, re.I)))
             except OSError:
                 pass

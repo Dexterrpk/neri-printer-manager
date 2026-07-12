@@ -67,15 +67,15 @@ class EnhancedWindow(GuidedWindow):
 
     def discover_devices(self) -> None:
         self.tools_status.setText(
-            "Consultando filas locais e rede. Resolvendo nomes por DNS reverso e NetBIOS..."
+            "Consultando filas locais e rede. A resolução de nomes possui timeout seguro."
         )
         self._run(RichDiscoveryService().discover, self._show_discovered)
 
     def _show_discovered(self, items: list[Any]) -> None:
         resolver = HostDisplayResolver()
+        display_hosts = resolver.resolve_many((item.host, item.address) for item in items)
         rows = []
-        for item in items:
-            display_host = resolver.resolve(item.host, item.address)
+        for item, display_host in zip(items, display_hosts, strict=True):
             display_ip = item.address if item.address and item.address != "Local" else "Local"
             rows.append(
                 (
@@ -93,7 +93,7 @@ class EnhancedWindow(GuidedWindow):
         self.tools_status.setText(
             f"{len(items)} impressora(s) identificada(s): {installed} instalada(s) neste computador e {remote} disponível(is) na rede."
             if items
-            else "Nenhuma impressora foi identificada. Verifique Avahi, CUPS e conectividade da rede."
+            else "Nenhuma impressora foi identificada. Verifique CUPS, Avahi e conectividade da rede."
         )
 
     def refresh_filters(self) -> None:
@@ -109,7 +109,7 @@ class EnhancedWindow(GuidedWindow):
             )
             return
         action_names = {
-            "reinstall_filters": "Reinstalar componentes CUPS ausentes",
+            "reinstall_filters": "Reinstalar componentes CUPS",
             "reinstall_ghostscript": "Reinstalar Ghostscript",
             "check_ppd": "Recriar fila ou escolher outro driver",
             "fix_permissions": "Corrigir somente permissões oficiais do CUPS",

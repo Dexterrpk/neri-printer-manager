@@ -1,18 +1,32 @@
-"""Resolve nomes amigáveis para equipamentos descobertos por endereço IP."""
+"""Resolve nomes amigáveis para equipamentos descobertos por endereço IP.
+
+A resolução é complementar: falhas de DNS/NetBIOS nunca podem interromper a
+listagem de impressoras. Consultas NetBIOS usam timeout curto, cache e execução
+concorrente para não bloquear a interface em redes com muitos dispositivos.
+"""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import re
 import socket
+from typing import Iterable
 
-from .core import CommandRunner
+from .core import CommandRunner, PrinterManagerError
 
 
 class HostDisplayResolver:
     """Tenta DNS reverso e NetBIOS sem repetir o próprio IP como hostname."""
 
+    UNKNOWN_HOSTS = {
+        "host não informado",
+        "origem não identificada",
+        "este computador",
+        "não identificado",
+    }
+
     def __init__(self, runner: CommandRunner | None = None) -> None:
-        self.runner = runner or CommandRunner(timeout=5)
+        self.runner = runner or CommandRunner(timeout=1)
         self._cache: dict[str, str] = {}
 
     @staticmethod
@@ -33,16 +47,12 @@ class HostDisplayResolver:
         host = self._clean(host)
         address = self._clean(address)
 
-        if host and not self._is_ip(host) and host.lower() not in {
-            "host não informado",
-            "origem não identificada",
-            "este computador",
-        }:
+        if host and not self._is_ip(host) and host.lower() not in self.UNKNOWN_HOSTS:
             return host
-
+        if host.lower() == "este computador":
+            return "Este computador"
         if not address or not self._is_ip(address):
-            return "Este computador" if host.lower() == "este computador" else "Não identificado"
-
+            return "Não identificado"
         if address in self._cache:
             return self._cache[address]
 
@@ -50,18 +60,30 @@ class HostDisplayResolver:
         self._cache[address] = resolved
         return resolved
 
+    def resolve_many(self, pairs: Iterable[tuple[str, str]]) -> list[str]:
+        values = list(pairs)
+        if not values:
+            return []
+        # Limita concorrência para não gerar tempestade NetBIOS na rede.
+        with ThreadPoolExecutor(max_workers=min(12, len(values))) as pool:
+            return list(pool.map(lambda pair: self.resolve(*pair), values))
+
     @staticmethod
     def _reverse_dns(address: str) -> str:
         try:
             name = socket.gethostbyaddr(address)[0].rstrip(".")
-        except OSError:
+        except (OSError, UnicodeError):
             return ""
         return "" if HostDisplayResolver._is_ip(name) else HostDisplayResolver._clean(name)
 
     def _netbios(self, address: str) -> str:
         if not self.runner.exists("nmblookup"):
             return ""
-        result = self.runner.run(["nmblookup", "-A", address], check=False)
+        try:
+            result = self.runner.run(["nmblookup", "-A", address], check=False)
+        except PrinterManagerError:
+            # Timeout, host silencioso e firewall são condições normais de descoberta.
+            return ""
         for line in result.stdout.splitlines():
             match = re.match(r"^\s*([^\s<]{1,63})\s+<00>\s+-\s+<ACTIVE>", line, re.IGNORECASE)
             if match:

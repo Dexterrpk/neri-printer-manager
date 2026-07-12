@@ -20,7 +20,7 @@ Section: admin
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: Neri InfoTech
-Depends: python3 (>= 3.10), python3-venv, cups, cups-client, cups-browsed, cups-filters, ghostscript, avahi-daemon, avahi-utils, policykit-1
+Depends: python3 (>= 3.10), python3-venv, cups, cups-client, cups-browsed, cups-filters, ghostscript, avahi-daemon, avahi-utils, policykit-1, libxcb-cursor0, libxkbcommon-x11-0, libxcb-xinerama0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libegl1, libgl1
 Recommends: samba, smbclient, printer-driver-gutenprint, foomatic-db-compressed-ppds
 Description: Gerenciador e diagnóstico profissional de impressoras para Linux Mint
 EOF
@@ -28,8 +28,10 @@ EOF
 cat > "${ROOT}/DEBIAN/postinst" <<'EOF'
 #!/usr/bin/env bash
 set -e
-python3 -m venv /opt/neri-printer-manager/venv
-/opt/neri-printer-manager/venv/bin/pip install --no-index --find-links /opt/neri-printer-manager/wheels neri-printer-manager
+if [[ ! -x /opt/neri-printer-manager/venv/bin/python ]]; then
+  python3 -m venv /opt/neri-printer-manager/venv
+fi
+/opt/neri-printer-manager/venv/bin/pip install --disable-pip-version-check --no-index --find-links /opt/neri-printer-manager/wheels neri-printer-manager
 systemctl enable --now cups.service avahi-daemon.service || true
 update-desktop-database >/dev/null 2>&1 || true
 EOF

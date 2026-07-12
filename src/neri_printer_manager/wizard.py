@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .core import CupsService, DiscoveryService, validate_device_uri, validate_queue_name
+from .installer import SmartInstallService
 from .protocols import ConnectionType, ProtocolAdvisor, ProtocolRecommendation
 
 
@@ -109,11 +110,11 @@ class PrinterWizard(QWizard):
     def _confirmation_page(self) -> QWizardPage:
         page = QWizardPage()
         page.setTitle("Confirmar instalação")
-        page.setSubTitle("Revise os dados. O programa usará impressão sem driver quando possível.")
+        page.setSubTitle("O modo automático tenta driverless e escolhe outro driver/protocolo se necessário.")
         form = QFormLayout(page)
         self.queue_name = QLineEdit(); self.queue_name.setPlaceholderText("Ex.: RECEPCAO_HP")
         self.driver = QComboBox()
-        self.driver.addItem("Automático / driverless (recomendado)", "everywhere")
+        self.driver.addItem("Automático com fallback (recomendado)", "everywhere")
         self.driver.addItem("Driver genérico PostScript", "drv:///sample.drv/generic.ppd")
         self.driver.addItem("Driver genérico PCL", "drv:///sample.drv/generpcl.ppd")
         self.summary = QLabel(); self.summary.setWordWrap(True); self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -192,7 +193,7 @@ class PrinterWizard(QWizard):
                 base = self.host.text().strip() or "IMPRESSORA"
                 suggested = "".join(char if char.isalnum() else "_" for char in base.upper())[:40]
                 self.queue_name.setText(suggested or "IMPRESSORA")
-            self.summary.setText(f"Protocolo/URI: {self.selected_uri}\nModo: instalação automática\nDriver: {self.driver.currentText()}")
+            self.summary.setText(f"Protocolo/URI inicial: {self.selected_uri}\nModo: instalação automática com fallback\nDriver inicial: {self.driver.currentText()}")
 
     def validateCurrentPage(self) -> bool:
         if self.currentId() == 1:
@@ -213,9 +214,17 @@ class PrinterWizard(QWizard):
             name = validate_queue_name(self.queue_name.text())
             uri = validate_device_uri(self.selected_uri)
             model = str(self.driver.currentData() or "everywhere")
-            self.cups.add_printer(name, uri, model)
+            outcome = SmartInstallService(self.cups).install(name, uri, model)
         except Exception as exc:
-            QMessageBox.critical(self, "Não foi possível instalar", f"{exc}\n\nRevise os dados ou tente outro protocolo.")
+            QMessageBox.critical(
+                self,
+                "Não foi possível instalar",
+                f"{exc}\n\nO programa tentou os protocolos e drivers compatíveis disponíveis.",
+            )
             return
-        QMessageBox.information(self, "Impressora instalada", "A fila foi criada. Agora você pode imprimir uma página de teste.")
+        QMessageBox.information(
+            self,
+            "Impressora instalada",
+            f"{outcome.message}\n\nURI final: {outcome.uri}\nDriver: {outcome.model}",
+        )
         super().accept()

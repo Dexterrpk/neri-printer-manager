@@ -1,8 +1,9 @@
 """Busca direcionada de impressoras por IP ou hostname.
 
-A resolução tenta, em ordem: DNS do sistema, ``getent``, mDNS/Avahi e
-NetBIOS/Samba. Isso permite informar nomes curtos usados em redes Windows,
-como ``RECEPCAO01`` ou ``\\RECEPCAO01``.
+A resolução tenta DNS, getent, mDNS/Avahi e NetBIOS. Depois consulta
+protocolos de impressão e tenta enumerar compartilhamentos SMB mesmo quando
+o teste TCP não detecta as portas 445/139, pois alguns firewalls corporativos
+respondem ao smbclient e bloqueiam sondagens simples.
 """
 from __future__ import annotations
 
@@ -44,7 +45,6 @@ class HostPrinterLocator:
 
     @staticmethod
     def normalize_host(value: str) -> str:
-        """Aceita hostname, IP, ``\\HOST`` e URLs SMB simples."""
         text = value.strip()
         if text.lower().startswith("smb://"):
             text = urlparse(text).hostname or ""
@@ -61,21 +61,15 @@ class HostPrinterLocator:
         except ValueError:
             pass
 
-        resolved = self._resolve_dns(requested)
-        if resolved:
-            return resolved
-
-        resolved = self._resolve_getent(requested)
-        if resolved:
-            return resolved
-
-        resolved = self._resolve_mdns(requested)
-        if resolved:
-            return resolved
-
-        resolved = self._resolve_netbios(requested)
-        if resolved:
-            return resolved
+        for resolver in (
+            self._resolve_dns,
+            self._resolve_getent,
+            self._resolve_mdns,
+            self._resolve_netbios,
+        ):
+            resolved = resolver(requested)
+            if resolved:
+                return resolved
 
         raise PrinterManagerError(
             f"Não foi possível localizar '{requested}'. Verifique se a máquina está ligada, "
@@ -100,7 +94,8 @@ class HostPrinterLocator:
     def _resolve_getent(self, host: str) -> ResolvedHost | None:
         if not self.runner.exists("getent"):
             return None
-        for candidate in (host, f"{host}.local" if "." not in host else host):
+        candidates = (host, f"{host}.local" if "." not in host else host)
+        for candidate in candidates:
             result = self.runner.run(["getent", "ahostsv4", candidate], check=False)
             for line in result.stdout.splitlines():
                 address = line.split(maxsplit=1)[0] if line.strip() else ""
@@ -187,49 +182,65 @@ class HostPrinterLocator:
                     explanation="Protocolo legado, usado quando IPP e JetDirect não estão disponíveis.",
                 )
             )
-        if checks[445].state is PortState.OPEN or checks[139].state is PortState.OPEN:
-            results.extend(self._smb_printers(resolved, recommended=not results))
+
+        # Tenta SMB sempre. Em algumas redes, o teste de porta é bloqueado,
+        # mas a enumeração real via smbclient funciona normalmente.
+        smb_results = self._smb_printers(resolved, recommended=not results)
+        existing_uris = {item.uri for item in results}
+        results.extend(item for item in smb_results if item.uri not in existing_uris)
 
         if not results:
             raise PrinterManagerError(
-                f"A máquina {resolved.canonical} foi localizada em {resolved.address} por {resolved.method}, "
-                "mas nenhuma porta de impressão respondeu."
+                f"O computador {resolved.canonical} foi localizado em {resolved.address} por "
+                f"{resolved.method}, mas não publicou nenhuma impressora acessível. Verifique se "
+                "a impressora está compartilhada, se o Compartilhamento de Arquivos e Impressoras "
+                "está habilitado e se o acesso exige usuário e senha."
             )
         return results
 
     def _smb_printers(self, resolved: ResolvedHost, *, recommended: bool) -> list[LocatedPrinter]:
         if not self.runner.exists("smbclient"):
             return []
-        responses = []
-        for target in (resolved.requested, resolved.canonical, resolved.address):
-            if target and target not in responses:
-                responses.append(target)
 
-        output = ""
-        for target in responses:
-            response = self.runner.run(["smbclient", "-N", "-g", "-L", f"//{target}"], check=False)
+        targets: list[str] = []
+        for target in (resolved.requested, resolved.canonical, resolved.address):
+            if target and target not in targets:
+                targets.append(target)
+
+        outputs: list[str] = []
+        for target in targets:
+            response = self.runner.run(
+                ["smbclient", "-N", "-g", "-L", f"//{target}"],
+                check=False,
+            )
             if response.stdout:
-                output = response.stdout
-                break
+                outputs.append(response.stdout)
 
         printers: list[LocatedPrinter] = []
-        for line in output.splitlines():
-            parts = line.split("|")
-            if len(parts) < 2 or parts[0].strip().lower() != "printer":
-                continue
-            share = parts[1].strip()
-            if not share or not re.fullmatch(r"[A-Za-z0-9$_. -]{1,127}", share):
-                continue
-            printers.append(
-                LocatedPrinter(
-                    name=share,
-                    host=resolved.canonical,
-                    address=resolved.address,
-                    connection=f"Compartilhada por computador — localizado por {resolved.method}",
-                    protocol="SMB",
-                    uri=f"smb://{resolved.address}/{share.replace(' ', '%20')}",
-                    recommended=recommended and not printers,
-                    explanation="Compartilhamento de impressora encontrado automaticamente no computador informado.",
+        seen: set[str] = set()
+        for output in outputs:
+            for line in output.splitlines():
+                parts = line.split("|")
+                if len(parts) < 2 or parts[0].strip().lower() != "printer":
+                    continue
+                share = parts[1].strip()
+                if (
+                    not share
+                    or share in seen
+                    or not re.fullmatch(r"[A-Za-z0-9$_. -]{1,127}", share)
+                ):
+                    continue
+                seen.add(share)
+                printers.append(
+                    LocatedPrinter(
+                        name=share,
+                        host=resolved.canonical,
+                        address=resolved.address,
+                        connection=f"Compartilhada por computador — localizado por {resolved.method}",
+                        protocol="SMB",
+                        uri=f"smb://{resolved.address}/{share.replace(' ', '%20')}",
+                        recommended=recommended and len(printers) == 0,
+                        explanation="Compartilhamento de impressora encontrado automaticamente no computador informado.",
+                    )
                 )
-            )
         return printers

@@ -6,11 +6,12 @@ from typing import Any
 
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QMessageBox
 
+from .cups_filters import CupsFilterService
 from .device_discovery import RichDiscoveryService
 from .guided_app import GuidedWindow
+from .host_display import HostDisplayResolver
 from .logging_config import configure_logging
 from .repair import RepairResult, RepairService
-from .cups_filters import CupsFilterService
 
 
 class EnhancedWindow(GuidedWindow):
@@ -19,14 +20,21 @@ class EnhancedWindow(GuidedWindow):
     def _tools(self):
         page, layout = self._page(
             "Ferramentas",
-            "Descubra o nome/modelo da impressora, o computador ou IP que a publica e se ela já está instalada neste Mint.",
+            "Descubra o nome e modelo da impressora, o computador que a publica, o IP e se ela já está instalada neste Mint.",
         )
         self.tools_status = QLabel("Clique em Descobrir impressoras.")
         self.tools_status.setObjectName("muted")
         self.tools_status.setWordWrap(True)
         layout.addWidget(self.tools_status)
         self.tools_table = self._table(
-            ["Nome da impressora", "Modelo", "Onde está", "Host / IP", "Protocolo", "Fila local"]
+            [
+                "Nome da impressora",
+                "Modelo",
+                "Computador / Host",
+                "Endereço IP",
+                "Protocolo",
+                "Fila local",
+            ]
         )
         layout.addWidget(self.tools_table, 1)
         row = QHBoxLayout()
@@ -58,30 +66,34 @@ class EnhancedWindow(GuidedWindow):
         return page
 
     def discover_devices(self) -> None:
-        self.tools_status.setText("Consultando filas locais, CUPS, DNS-SD e Avahi...")
+        self.tools_status.setText(
+            "Consultando filas locais e rede. Resolvendo nomes por DNS reverso e NetBIOS..."
+        )
         self._run(RichDiscoveryService().discover, self._show_discovered)
 
     def _show_discovered(self, items: list[Any]) -> None:
-        self._fill(
-            self.tools_table,
-            [
+        resolver = HostDisplayResolver()
+        rows = []
+        for item in items:
+            display_host = resolver.resolve(item.host, item.address)
+            display_ip = item.address if item.address and item.address != "Local" else "Local"
+            rows.append(
                 (
                     item.name,
                     item.model,
-                    item.location,
-                    " / ".join(value for value in (item.host, item.address) if value) or "Local",
+                    display_host,
+                    display_ip,
                     item.protocol,
                     item.installed_queue or "Não instalada",
                 )
-                for item in items
-            ],
-        )
+            )
+        self._fill(self.tools_table, rows)
         installed = sum(1 for item in items if item.installed_queue)
         remote = len(items) - installed
         self.tools_status.setText(
             f"{len(items)} impressora(s) identificada(s): {installed} instalada(s) neste computador e {remote} disponível(is) na rede."
-            if items else
-            "Nenhuma impressora foi identificada. Verifique Avahi, CUPS e conectividade da rede."
+            if items
+            else "Nenhuma impressora foi identificada. Verifique Avahi, CUPS e conectividade da rede."
         )
 
     def refresh_filters(self) -> None:
@@ -92,7 +104,9 @@ class EnhancedWindow(GuidedWindow):
         self.filter_findings = items
         if not items:
             self._fill(self.diag_table, [])
-            self.diag_summary.setText("Nenhuma falha atual de filtro, backend, PPD ou Ghostscript foi encontrada.")
+            self.diag_summary.setText(
+                "Nenhuma falha atual de filtro, backend, PPD ou Ghostscript foi encontrada."
+            )
             return
         action_names = {
             "reinstall_filters": "Reinstalar componentes CUPS ausentes",

@@ -1,9 +1,4 @@
-"""Serviços centrais do Neri Printer Manager.
-
-A camada não depende da interface gráfica. Isso facilita testes, uso pela CLI e
-futuras interfaces. Comandos são executados sem shell para reduzir o risco de
-injeção e sempre passam por validação centralizada.
-"""
+"""Serviços centrais do Neri Printer Manager."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -11,6 +6,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import shutil
@@ -104,7 +100,7 @@ def validate_device_uri(value: str) -> str:
 
 
 class CommandRunner:
-    """Executa ferramentas do sistema com timeout e saída capturada."""
+    """Executa ferramentas do sistema com timeout e saída previsível."""
 
     def __init__(self, timeout: int = 30) -> None:
         self.timeout = timeout
@@ -128,6 +124,8 @@ class CommandRunner:
                 raise PrinterManagerError("pkexec não está instalado.")
             command.insert(0, "pkexec")
         LOG.info("Executando comando: %s", command[0])
+        env = os.environ.copy()
+        env.update({"LC_ALL": "C", "LANG": "C", "LANGUAGE": "C"})
         try:
             completed = subprocess.run(
                 command,
@@ -135,6 +133,7 @@ class CommandRunner:
                 text=True,
                 timeout=self.timeout,
                 check=False,
+                env=env,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise PrinterManagerError(f"Falha ao executar {command[0]}: {exc}") from exc
@@ -195,10 +194,17 @@ class CupsService:
         return devices
 
     def add_printer(self, name: str, uri: str, model: str = "everywhere") -> None:
-        safe_name = validate_queue_name(name)
-        safe_uri = validate_device_uri(uri)
         self.runner.run(
-            ["/usr/sbin/lpadmin", "-p", safe_name, "-E", "-v", safe_uri, "-m", model],
+            [
+                "/usr/sbin/lpadmin",
+                "-p",
+                validate_queue_name(name),
+                "-E",
+                "-v",
+                validate_device_uri(uri),
+                "-m",
+                model,
+            ],
             privileged=True,
         )
 
@@ -218,14 +224,10 @@ class CupsService:
         self.runner.run(["/usr/sbin/cupsaccept", safe_name], privileged=True)
 
     def print_test_page(self, name: str) -> None:
-        self.runner.run(
-            ["lp", "-d", validate_queue_name(name), "/usr/share/cups/data/testprint"]
-        )
+        self.runner.run(["lp", "-d", validate_queue_name(name), "/usr/share/cups/data/testprint"])
 
 
 class JobService:
-    """Consulta e cancela trabalhos de impressão."""
-
     def __init__(self, runner: CommandRunner | None = None) -> None:
         self.runner = runner or CommandRunner()
 
@@ -235,14 +237,7 @@ class JobService:
         for line in result.stdout.splitlines():
             parts = line.split(maxsplit=4)
             if len(parts) >= 3:
-                jobs.append(
-                    PrintJob(
-                        job_id=parts[0],
-                        owner=parts[1],
-                        size=parts[2],
-                        submitted=" ".join(parts[3:]) if len(parts) > 3 else "",
-                    )
-                )
+                jobs.append(PrintJob(parts[0], parts[1], parts[2], " ".join(parts[3:])))
         return jobs
 
     def cancel(self, job_id: str) -> None:
@@ -281,11 +276,7 @@ class DiagnosticService:
         if self.runner.exists(name):
             return DiagnosticItem(f"command.{name}", name, Severity.OK, "Disponível")
         return DiagnosticItem(
-            f"command.{name}",
-            name,
-            Severity.ERROR,
-            "Não encontrado",
-            f"Instale o pacote que fornece {name}.",
+            f"command.{name}", name, Severity.ERROR, "Não encontrado", f"Instale o pacote que fornece {name}."
         )
 
     def _cups_service(self) -> DiagnosticItem:
@@ -306,16 +297,11 @@ class DiagnosticService:
                 return DiagnosticItem("cups.port", "Porta 631", Severity.OK, "Respondendo")
         except OSError as exc:
             return DiagnosticItem(
-                "cups.port",
-                "Porta 631",
-                Severity.ERROR,
-                str(exc),
-                "Verifique o serviço CUPS e o arquivo cupsd.conf.",
+                "cups.port", "Porta 631", Severity.ERROR, str(exc), "Verifique o serviço CUPS e cupsd.conf."
             )
 
 
 def write_report(path: Path, printers: list[Printer], diagnostics: list[DiagnosticItem]) -> Path:
-    """Grava um relatório técnico portátil em JSON."""
     payload = {
         "printers": [asdict(item) for item in printers],
         "diagnostics": [asdict(item) for item in diagnostics],

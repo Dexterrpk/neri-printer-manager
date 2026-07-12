@@ -22,7 +22,8 @@ export DEBIAN_FRONTEND=noninteractive
 PACKAGES=(
   python3 python3-venv python3-pip
   cups cups-client cups-browsed cups-filters ghostscript
-  avahi-daemon avahi-utils policykit-1 smbclient
+  avahi-daemon avahi-utils libnss-mdns
+  policykit-1 smbclient samba-common-bin
   hplip printer-driver-hpcups printer-driver-gutenprint
   foomatic-db-compressed-ppds
   libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0

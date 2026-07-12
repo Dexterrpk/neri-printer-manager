@@ -1,12 +1,8 @@
-"""Instalação inteligente com fallback de protocolo e driver.
-
-O objetivo é evitar que o usuário precise conhecer PPD, IPP Everywhere ou
-JetDirect. Cada tentativa é explícita, limitada e validada.
-"""
+"""Instalação inteligente com fallback de protocolo e driver."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from .core import CupsService, PrinterManagerError, validate_device_uri, validate_queue_name
 from .host_locator import LocatedPrinter
@@ -49,10 +45,21 @@ class SmartPrinterInstaller:
             uris.append(f"lpd://{host}/lp")
         return list(dict.fromkeys(uris))
 
+    @staticmethod
+    def _safe_display_uri(uri: str) -> str:
+        parsed = urlparse(uri)
+        if parsed.username is None:
+            return uri
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        return urlunparse((parsed.scheme, host, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
     def plan(self, item: LocatedPrinter) -> list[InstallAttempt]:
         if item.protocol == "SMB":
+            authenticated_uri = item.installation_uri()
             return [
-                InstallAttempt(item.uri, model, description)
+                InstallAttempt(authenticated_uri, model, description)
                 for model, description in self.GENERIC_MODELS
             ]
 
@@ -80,13 +87,15 @@ class SmartPrinterInstaller:
                 )
                 return InstallOutcome(
                     safe_queue,
-                    attempt.uri,
+                    self._safe_display_uri(attempt.uri),
                     attempt.model,
                     attempt.description,
                     index,
                 )
             except PrinterManagerError as exc:
-                failures.append(f"{attempt.description} em {attempt.uri}: {exc}")
+                failures.append(
+                    f"{attempt.description} em {self._safe_display_uri(attempt.uri)}: {exc}"
+                )
                 try:
                     self.cups.remove_printer(safe_queue)
                 except PrinterManagerError:

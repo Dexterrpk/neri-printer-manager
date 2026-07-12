@@ -1,17 +1,14 @@
-"""Busca direcionada de impressoras por IP ou hostname.
-
-A resolução tenta DNS, getent, mDNS/Avahi e NetBIOS. Depois consulta
-protocolos de impressão e tenta enumerar compartilhamentos SMB mesmo quando
-o teste TCP não detecta as portas 445/139, pois alguns firewalls corporativos
-respondem ao smbclient e bloqueiam sondagens simples.
-"""
+"""Busca de impressoras por IP/hostname com DNS, mDNS, NetBIOS e SMB."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import ipaddress
+import os
+from pathlib import Path
 import re
 import socket
-from urllib.parse import urlparse
+import tempfile
+from urllib.parse import quote, urlparse
 
 from .core import CommandRunner, PrinterManagerError
 from .network import NetworkService, PortState
@@ -35,6 +32,18 @@ class LocatedPrinter:
     uri: str
     recommended: bool
     explanation: str
+    username: str = field(default="", repr=False)
+    password: str = field(default="", repr=False)
+
+    def installation_uri(self) -> str:
+        """Retorna a URI SMB autenticada somente no momento da instalação."""
+        if self.protocol != "SMB" or not self.username:
+            return self.uri
+        parsed = urlparse(self.uri)
+        user = quote(self.username, safe="")
+        password = quote(self.password, safe="")
+        credentials = f"{user}:{password}@" if self.password else f"{user}@"
+        return f"smb://{credentials}{parsed.hostname}{parsed.path}"
 
 
 class HostPrinterLocator:
@@ -60,17 +69,10 @@ class HostPrinterLocator:
             return ResolvedHost(requested, self._reverse_name(requested), requested, "IP informado")
         except ValueError:
             pass
-
-        for resolver in (
-            self._resolve_dns,
-            self._resolve_getent,
-            self._resolve_mdns,
-            self._resolve_netbios,
-        ):
+        for resolver in (self._resolve_dns, self._resolve_getent, self._resolve_mdns, self._resolve_netbios):
             resolved = resolver(requested)
             if resolved:
                 return resolved
-
         raise PrinterManagerError(
             f"Não foi possível localizar '{requested}'. Verifique se a máquina está ligada, "
             "na mesma rede e se o nome está correto. Também pode tentar o endereço IP."
@@ -94,8 +96,7 @@ class HostPrinterLocator:
     def _resolve_getent(self, host: str) -> ResolvedHost | None:
         if not self.runner.exists("getent"):
             return None
-        candidates = (host, f"{host}.local" if "." not in host else host)
-        for candidate in candidates:
+        for candidate in (host, f"{host}.local" if "." not in host else host):
             result = self.runner.run(["getent", "ahostsv4", candidate], check=False)
             for line in result.stdout.splitlines():
                 address = line.split(maxsplit=1)[0] if line.strip() else ""
@@ -138,83 +139,83 @@ class HostPrinterLocator:
         except OSError:
             return fallback or address
 
-    def locate(self, host: str) -> list[LocatedPrinter]:
+    def locate(self, host: str, username: str = "", password: str = "") -> list[LocatedPrinter]:
         resolved = self.resolve(host)
         results: list[LocatedPrinter] = []
         checks = {item.port: item for item in NetworkService().scan_printer_ports(resolved.address)}
 
         if checks[631].state is PortState.OPEN:
-            results.append(
-                LocatedPrinter(
-                    name=f"Impressora em {resolved.canonical}",
-                    host=resolved.canonical,
-                    address=resolved.address,
-                    connection=f"Impressora de rede — localizada por {resolved.method}",
-                    protocol="IPP",
-                    uri=f"ipp://{resolved.address}/ipp/print",
-                    recommended=True,
-                    explanation="IPP foi encontrado. O instalador testará driverless e usará fallback se necessário.",
-                )
-            )
+            results.append(LocatedPrinter(
+                f"Impressora em {resolved.canonical}", resolved.canonical, resolved.address,
+                f"Impressora de rede — localizada por {resolved.method}", "IPP",
+                f"ipp://{resolved.address}/ipp/print", True,
+                "IPP foi encontrado. O instalador testará driverless e alternativas automaticamente.",
+            ))
         if checks[9100].state is PortState.OPEN:
-            results.append(
-                LocatedPrinter(
-                    name=f"Impressora em {resolved.canonical}",
-                    host=resolved.canonical,
-                    address=resolved.address,
-                    connection=f"Impressora de rede — localizada por {resolved.method}",
-                    protocol="JetDirect",
-                    uri=f"socket://{resolved.address}:9100",
-                    recommended=not results,
-                    explanation="Conexão direta pela porta 9100, comum em impressoras corporativas.",
-                )
-            )
+            results.append(LocatedPrinter(
+                f"Impressora em {resolved.canonical}", resolved.canonical, resolved.address,
+                f"Impressora de rede — localizada por {resolved.method}", "JetDirect",
+                f"socket://{resolved.address}:9100", not results,
+                "Conexão direta pela porta 9100, comum em impressoras corporativas.",
+            ))
         if checks[515].state is PortState.OPEN:
-            results.append(
-                LocatedPrinter(
-                    name=f"Impressora em {resolved.canonical}",
-                    host=resolved.canonical,
-                    address=resolved.address,
-                    connection=f"Impressora de rede — localizada por {resolved.method}",
-                    protocol="LPD",
-                    uri=f"lpd://{resolved.address}/lp",
-                    recommended=not results,
-                    explanation="Protocolo legado, usado quando IPP e JetDirect não estão disponíveis.",
-                )
-            )
+            results.append(LocatedPrinter(
+                f"Impressora em {resolved.canonical}", resolved.canonical, resolved.address,
+                f"Impressora de rede — localizada por {resolved.method}", "LPD",
+                f"lpd://{resolved.address}/lp", not results,
+                "Protocolo legado usado quando IPP e JetDirect não estão disponíveis.",
+            ))
 
-        # Tenta SMB sempre. Em algumas redes, o teste de porta é bloqueado,
-        # mas a enumeração real via smbclient funciona normalmente.
-        smb_results = self._smb_printers(resolved, recommended=not results)
+        smb_results = self._smb_printers(resolved, username, password, recommended=not results)
         existing_uris = {item.uri for item in results}
         results.extend(item for item in smb_results if item.uri not in existing_uris)
 
         if not results:
+            credential_hint = (
+                "As credenciais informadas não deram acesso às filas compartilhadas."
+                if username else
+                "O acesso anônimo não mostrou filas. Informe usuário e senha do computador remoto."
+            )
             raise PrinterManagerError(
                 f"O computador {resolved.canonical} foi localizado em {resolved.address} por "
-                f"{resolved.method}, mas não publicou nenhuma impressora acessível. Verifique se "
-                "a impressora está compartilhada, se o Compartilhamento de Arquivos e Impressoras "
-                "está habilitado e se o acesso exige usuário e senha."
+                f"{resolved.method}, mas não publicou nenhuma impressora acessível. {credential_hint}"
             )
         return results
 
-    def _smb_printers(self, resolved: ResolvedHost, *, recommended: bool) -> list[LocatedPrinter]:
+    def _smb_printers(
+        self,
+        resolved: ResolvedHost,
+        username: str,
+        password: str,
+        *,
+        recommended: bool,
+    ) -> list[LocatedPrinter]:
         if not self.runner.exists("smbclient"):
             return []
-
-        targets: list[str] = []
-        for target in (resolved.requested, resolved.canonical, resolved.address):
-            if target and target not in targets:
-                targets.append(target)
-
+        targets = list(dict.fromkeys(filter(None, (resolved.requested, resolved.canonical, resolved.address))))
         outputs: list[str] = []
-        for target in targets:
-            response = self.runner.run(
-                ["smbclient", "-N", "-g", "-L", f"//{target}"],
-                check=False,
-            )
-            if response.stdout:
-                outputs.append(response.stdout)
+
+        auth_path: Path | None = None
+        try:
+            if username:
+                handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False)
+                auth_path = Path(handle.name)
+                handle.write(f"username = {username}\npassword = {password}\n")
+                handle.close()
+                os.chmod(auth_path, 0o600)
+
+            for target in targets:
+                command = ["smbclient", "-g", "-L", f"//{target}"]
+                if auth_path:
+                    command[1:1] = ["-A", str(auth_path)]
+                else:
+                    command[1:1] = ["-N"]
+                response = self.runner.run(command, check=False)
+                if response.stdout:
+                    outputs.append(response.stdout)
+        finally:
+            if auth_path:
+                auth_path.unlink(missing_ok=True)
 
         printers: list[LocatedPrinter] = []
         seen: set[str] = set()
@@ -224,23 +225,16 @@ class HostPrinterLocator:
                 if len(parts) < 2 or parts[0].strip().lower() != "printer":
                     continue
                 share = parts[1].strip()
-                if (
-                    not share
-                    or share in seen
-                    or not re.fullmatch(r"[A-Za-z0-9$_. -]{1,127}", share)
-                ):
+                if not share or share in seen or not re.fullmatch(r"[A-Za-z0-9$_. -]{1,127}", share):
                     continue
                 seen.add(share)
-                printers.append(
-                    LocatedPrinter(
-                        name=share,
-                        host=resolved.canonical,
-                        address=resolved.address,
-                        connection=f"Compartilhada por computador — localizado por {resolved.method}",
-                        protocol="SMB",
-                        uri=f"smb://{resolved.address}/{share.replace(' ', '%20')}",
-                        recommended=recommended and len(printers) == 0,
-                        explanation="Compartilhamento de impressora encontrado automaticamente no computador informado.",
-                    )
-                )
+                printers.append(LocatedPrinter(
+                    share, resolved.canonical, resolved.address,
+                    f"Compartilhada por computador — localizado por {resolved.method}", "SMB",
+                    f"smb://{resolved.address}/{share.replace(' ', '%20')}",
+                    recommended and not printers,
+                    "Impressora compartilhada encontrada com acesso autenticado." if username
+                    else "Impressora compartilhada encontrada sem autenticação.",
+                    username, password,
+                ))
         return printers

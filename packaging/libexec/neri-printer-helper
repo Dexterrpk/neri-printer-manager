@@ -11,24 +11,17 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 QUEUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$")
 ALLOWED_SCHEMES = {"ipp", "ipps", "http", "https", "socket", "lpd", "smb", "usb"}
 ALLOWED_PACKAGES = {
-    "cups",
-    "cups-client",
-    "cups-browsed",
-    "cups-filters",
-    "ghostscript",
-    "avahi-daemon",
-    "avahi-utils",
-    "policykit-1",
-    "samba",
-    "smbclient",
-    "printer-driver-gutenprint",
-    "foomatic-db-compressed-ppds",
+    "cups", "cups-client", "cups-browsed", "cups-filters", "ghostscript",
+    "avahi-daemon", "avahi-utils", "policykit-1", "samba", "smbclient",
+    "printer-driver-gutenprint", "foomatic-db-compressed-ppds",
 }
+CUPS_EXEC_DIRS = (Path("/usr/lib/cups/filter"), Path("/usr/lib/cups/backend"))
 
 
 def fail(message: str, code: int = 2) -> int:
@@ -77,6 +70,24 @@ def install_packages(values: list[str], *, reinstall: bool = False) -> int:
     return execute(command)
 
 
+def fix_cups_permissions() -> int:
+    """Corrige somente executáveis regulares nos diretórios oficiais do CUPS."""
+    changed = 0
+    for directory in CUPS_EXEC_DIRS:
+        if not directory.is_dir():
+            continue
+        for entry in directory.iterdir():
+            if not entry.is_file() or entry.is_symlink():
+                continue
+            mode = entry.stat().st_mode & 0o7777
+            desired = mode | 0o111
+            if desired != mode:
+                entry.chmod(desired)
+                changed += 1
+    print(f"{changed} arquivo(s) corrigido(s)")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if os.geteuid() != 0:
         return fail("o helper precisa ser executado através do pkexec")
@@ -89,9 +100,7 @@ def main(argv: list[str]) -> int:
             name, device_uri, model = queue(args[0]), uri(args[1]), args[2]
             if not model or len(model) > 200:
                 raise ValueError("modelo inválido")
-            return execute(
-                ["/usr/sbin/lpadmin", "-p", name, "-E", "-v", device_uri, "-m", model]
-            )
+            return execute(["/usr/sbin/lpadmin", "-p", name, "-E", "-v", device_uri, "-m", model])
         if action == "remove" and len(args) == 1:
             return execute(["/usr/sbin/lpadmin", "-x", queue(args[0])])
         if action == "pause" and len(args) == 1:
@@ -108,7 +117,9 @@ def main(argv: list[str]) -> int:
             return execute(["/usr/bin/systemctl", "restart", "cups.service"])
         if action == "enable-cups" and not args:
             return execute(["/usr/bin/systemctl", "enable", "--now", "cups.service"])
-    except ValueError as exc:
+        if action == "fix-cups-permissions" and not args:
+            return fix_cups_permissions()
+    except (OSError, ValueError) as exc:
         return fail(str(exc))
     return fail("ação ou argumentos não permitidos")
 

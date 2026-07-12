@@ -1,4 +1,4 @@
-"""Diagnóstico de falhas de filtros, backends e PPDs do CUPS."""
+"""Diagnóstico atual e verificável de filtros, backends e PPDs do CUPS."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,9 +14,10 @@ class RepairAction(str, Enum):
     REINSTALL_FILTERS = "reinstall_filters"
     REINSTALL_GHOSTSCRIPT = "reinstall_ghostscript"
     CHECK_PPD = "check_ppd"
-    CHECK_PERMISSIONS = "check_permissions"
+    FIX_PERMISSIONS = "fix_permissions"
     RESTART_CUPS = "restart_cups"
     CHECK_BACKEND = "check_backend"
+    CLEAR_STALE_JOBS = "clear_stale_jobs"
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,48 +27,46 @@ class FilterFinding:
     severity: Severity
     evidence: str
     actions: tuple[RepairAction, ...]
+    source: str = "CUPS"
+    current: bool = True
 
 
 _SIGNATURES: tuple[tuple[re.Pattern[str], str, str, tuple[RepairAction, ...]], ...] = (
     (
-        re.compile(r"filter failed", re.IGNORECASE),
+        re.compile(r"filter failed|stopped with status [^0]", re.IGNORECASE),
         "filter_failed",
-        "Filtro de impressão falhou",
-        (
-            RepairAction.REINSTALL_FILTERS,
-            RepairAction.REINSTALL_GHOSTSCRIPT,
-            RepairAction.RESTART_CUPS,
-        ),
+        "Filtro falhou em trabalho recente",
+        (RepairAction.RESTART_CUPS,),
     ),
     (
-        re.compile(r"unable to open ppd|ppd.*(missing|not found)", re.IGNORECASE),
+        re.compile(r"unable to open ppd|ppd.*(missing|not found|bad value)", re.IGNORECASE),
         "ppd_missing",
-        "PPD ausente ou ilegível",
-        (RepairAction.CHECK_PPD, RepairAction.CHECK_PERMISSIONS),
+        "Arquivo PPD ausente ou inválido",
+        (RepairAction.CHECK_PPD,),
     ),
     (
         re.compile(r"permission denied", re.IGNORECASE),
         "permission_denied",
-        "Permissão negada em filtro ou backend",
-        (RepairAction.CHECK_PERMISSIONS, RepairAction.RESTART_CUPS),
+        "Permissão incorreta em filtro ou backend",
+        (RepairAction.FIX_PERMISSIONS, RepairAction.RESTART_CUPS),
     ),
     (
         re.compile(r"ghostscript|gs:.*error", re.IGNORECASE),
         "ghostscript_failed",
-        "Falha no Ghostscript",
+        "Falha confirmada no Ghostscript",
         (RepairAction.REINSTALL_GHOSTSCRIPT, RepairAction.RESTART_CUPS),
     ),
     (
-        re.compile(r"backend failed|backend.*(not found|stopped)", re.IGNORECASE),
+        re.compile(r"backend failed|backend.*(not found|stopped|exited)", re.IGNORECASE),
         "backend_failed",
         "Backend de comunicação falhou",
-        (RepairAction.CHECK_BACKEND, RepairAction.CHECK_PERMISSIONS, RepairAction.RESTART_CUPS),
+        (RepairAction.CHECK_BACKEND, RepairAction.RESTART_CUPS),
     ),
     (
-        re.compile(r"broken pipe", re.IGNORECASE),
-        "broken_pipe",
-        "Comunicação interrompida durante a impressão",
-        (RepairAction.CHECK_BACKEND, RepairAction.RESTART_CUPS),
+        re.compile(r"broken pipe|unable to connect|connection refused", re.IGNORECASE),
+        "communication_failed",
+        "Comunicação com a impressora foi interrompida",
+        (RepairAction.CHECK_BACKEND,),
     ),
 )
 
@@ -89,21 +88,27 @@ class CupsFilterService:
                 if pattern.search(line):
                     findings.setdefault(
                         code,
-                        FilterFinding(code, title, Severity.ERROR, line[:500], actions),
+                        FilterFinding(code, title, Severity.ERROR, line[:500], actions, "Log recente"),
                     )
         return list(findings.values())
 
-    def read_recent_errors(self, lines: int = 400) -> str:
-        """Lê o log via journalctl e usa error_log como fallback."""
+    def read_recent_errors(self, minutes: int = 30, lines: int = 250) -> str:
+        """Considera somente erros recentes, evitando reparar falhas antigas já resolvidas."""
         journal = self.runner.run(
-            ["journalctl", "-u", "cups.service", "-n", str(lines), "--no-pager"],
+            [
+                "journalctl", "-u", "cups.service", "--since", f"-{minutes} minutes",
+                "-n", str(lines), "--no-pager", "-p", "warning..alert",
+            ],
             check=False,
         )
         chunks = [journal.stdout]
         error_log = Path("/var/log/cups/error_log")
         if error_log.is_file() and os.access(error_log, os.R_OK):
             try:
-                chunks.append("\n".join(error_log.read_text(errors="replace").splitlines()[-lines:]))
+                recent = error_log.read_text(errors="replace").splitlines()[-lines:]
+                # O error_log não possui um formato de data confiável em todas as versões;
+                # só adicionamos linhas marcadas como erro para reduzir falsos positivos.
+                chunks.append("\n".join(line for line in recent if re.search(r"\bE\s|\[Job \d+\].*(failed|error)", line, re.I)))
             except OSError:
                 pass
         return "\n".join(item for item in chunks if item)
@@ -111,6 +116,7 @@ class CupsFilterService:
     def diagnose(self) -> list[FilterFinding]:
         findings = self.analyze_text(self.read_recent_errors())
         findings.extend(self._filesystem_findings())
+        findings.extend(self._package_findings())
         unique: dict[str, FilterFinding] = {}
         for item in findings:
             unique.setdefault(item.code, item)
@@ -123,26 +129,28 @@ class CupsFilterService:
                 findings.append(
                     FilterFinding(
                         f"missing_dir:{directory}",
-                        f"Diretório do CUPS ausente: {directory}",
+                        f"Diretório obrigatório ausente: {directory}",
                         Severity.ERROR,
                         str(directory),
                         (RepairAction.REINSTALL_FILTERS,),
+                        "Sistema de arquivos",
                     )
                 )
                 continue
             bad_files: list[str] = []
             try:
                 for entry in directory.iterdir():
-                    if entry.is_file() and not os.access(entry, os.X_OK):
+                    if entry.is_file() and not entry.is_symlink() and not os.access(entry, os.X_OK):
                         bad_files.append(entry.name)
             except OSError as exc:
                 findings.append(
                     FilterFinding(
                         f"unreadable_dir:{directory}",
-                        "Não foi possível verificar os filtros",
+                        "Não foi possível verificar diretório do CUPS",
                         Severity.WARNING,
                         str(exc),
-                        (RepairAction.CHECK_PERMISSIONS,),
+                        (),
+                        "Sistema de arquivos",
                     )
                 )
             if bad_files:
@@ -152,7 +160,28 @@ class CupsFilterService:
                         "Filtros ou backends sem permissão de execução",
                         Severity.ERROR,
                         ", ".join(sorted(bad_files)[:20]),
-                        (RepairAction.CHECK_PERMISSIONS, RepairAction.RESTART_CUPS),
+                        (RepairAction.FIX_PERMISSIONS, RepairAction.RESTART_CUPS),
+                        "Sistema de arquivos",
+                    )
+                )
+        return findings
+
+    def _package_findings(self) -> list[FilterFinding]:
+        findings: list[FilterFinding] = []
+        for package, action, title in (
+            ("cups-filters", RepairAction.REINSTALL_FILTERS, "Pacote cups-filters ausente"),
+            ("ghostscript", RepairAction.REINSTALL_GHOSTSCRIPT, "Ghostscript ausente"),
+        ):
+            result = self.runner.run(["dpkg-query", "-W", "-f=${Status}", package], check=False)
+            if result.returncode != 0 or "install ok installed" not in result.stdout:
+                findings.append(
+                    FilterFinding(
+                        f"package_missing:{package}",
+                        title,
+                        Severity.ERROR,
+                        package,
+                        (action,),
+                        "Pacotes",
                     )
                 )
         return findings

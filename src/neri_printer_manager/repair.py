@@ -1,4 +1,4 @@
-"""Orquestra reparos seguros e verificáveis."""
+"""Orquestra reparos seguros, específicos e verificáveis."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -33,9 +33,7 @@ class RepairService:
 
     def _helper(self, action: str, *args: str) -> None:
         if not HELPER.exists():
-            raise PrinterManagerError(
-                "Helper administrativo não instalado. Reinstale o pacote do aplicativo."
-            )
+            raise PrinterManagerError("Helper administrativo não instalado. Reinstale o aplicativo.")
         self.runner.run(["pkexec", str(HELPER), action, *args], check=True)
 
     def install_missing_dependencies(self, include_optional: bool = False) -> RepairResult:
@@ -45,38 +43,43 @@ class RepairService:
         self._helper("install-packages", *missing)
         remaining = DependencyService().missing(include_optional=include_optional)
         if remaining:
-            return RepairResult(
-                "dependencies",
-                RepairStatus.FAILED,
-                f"Pacotes ainda ausentes: {', '.join(remaining)}",
-            )
+            return RepairResult("dependencies", RepairStatus.FAILED, f"Pacotes ainda ausentes: {', '.join(remaining)}")
         return RepairResult("dependencies", RepairStatus.SUCCESS, "Dependências instaladas")
 
     def repair_filter_finding(self, finding: FilterFinding) -> list[RepairResult]:
         results: list[RepairResult] = []
+
         packages = CupsFilterService.packages_for(finding.actions)
         if packages:
             try:
                 self._helper("reinstall-packages", *packages)
-                results.append(
-                    RepairResult("reinstall-packages", RepairStatus.SUCCESS, ", ".join(packages))
-                )
+                results.append(RepairResult("reinstall-packages", RepairStatus.SUCCESS, ", ".join(packages)))
             except PrinterManagerError as exc:
-                results.append(RepairResult("reinstall-packages", RepairStatus.FAILED, str(exc)))
-                return results
+                return [RepairResult("reinstall-packages", RepairStatus.FAILED, str(exc))]
+
+        if RepairAction.FIX_PERMISSIONS in finding.actions:
+            try:
+                self._helper("fix-cups-permissions")
+                results.append(RepairResult("fix-permissions", RepairStatus.SUCCESS, "Permissões oficiais do CUPS verificadas"))
+            except PrinterManagerError as exc:
+                results.append(RepairResult("fix-permissions", RepairStatus.FAILED, str(exc)))
+
+        if RepairAction.CHECK_PPD in finding.actions:
+            results.append(RepairResult("check-ppd", RepairStatus.SKIPPED, "PPD pertence à fila afetada; recrie a fila ou selecione outro driver"))
+
+        if RepairAction.CHECK_BACKEND in finding.actions:
+            results.append(RepairResult("check-backend", RepairStatus.SKIPPED, "Verifique conectividade, URI e credenciais da impressora; não há reparo genérico seguro"))
+
         if RepairAction.RESTART_CUPS in finding.actions:
             try:
                 self._helper("restart-cups")
                 results.append(RepairResult("restart-cups", RepairStatus.SUCCESS, "CUPS reiniciado"))
             except PrinterManagerError as exc:
                 results.append(RepairResult("restart-cups", RepairStatus.FAILED, str(exc)))
+
         post = CupsFilterService().diagnose()
         if any(item.code == finding.code for item in post):
-            results.append(
-                RepairResult("verification", RepairStatus.FAILED, "Falha ainda presente após reparo")
-            )
+            results.append(RepairResult("verification", RepairStatus.FAILED, "A condição ainda aparece na verificação atual"))
         else:
-            results.append(
-                RepairResult("verification", RepairStatus.SUCCESS, "Reparo verificado")
-            )
+            results.append(RepairResult("verification", RepairStatus.SUCCESS, "Correção verificada; a condição não reapareceu"))
         return results

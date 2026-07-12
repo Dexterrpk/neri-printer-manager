@@ -1,4 +1,4 @@
-"""Interface guiada focada em busca por IP/hostname e instalação automática."""
+"""Interface guiada para localizar e instalar impressoras por IP ou hostname."""
 from __future__ import annotations
 
 import re
@@ -150,8 +150,7 @@ class GuidedWindow(QMainWindow):
     def _home(self) -> QWidget:
         page, layout = self._page(
             "Encontre e instale sem conhecer protocolos",
-            "Digite o nome de qualquer computador, IP ou endereço como \\MAQ211. "
-            "O programa tenta DNS, mDNS e NetBIOS e escolhe a conexão automaticamente.",
+            "Digite o nome do computador, IP ou endereço como \\MAQ211. O programa tenta DNS, mDNS e NetBIOS.",
         )
         card, card_layout = self._card()
         self.home_input = QLineEdit()
@@ -169,7 +168,7 @@ class GuidedWindow(QMainWindow):
     def _finder(self) -> QWidget:
         page, layout = self._page(
             "Encontrar impressora na rede",
-            "A busca resolve nomes curtos por NetBIOS quando o DNS do hospital não conhece a máquina.",
+            "Use credenciais apenas quando o computador remoto exigir login. A senha não fica visível na tela.",
         )
         row = QHBoxLayout()
         self.find_input = QLineEdit()
@@ -178,6 +177,24 @@ class GuidedWindow(QMainWindow):
         row.addWidget(self.find_input, 1)
         row.addWidget(self._button("Buscar", self.search, True))
         layout.addLayout(row)
+
+        auth_card, auth_layout = self._card()
+        auth_layout.addWidget(QLabel("Acesso ao computador remoto (opcional)"))
+        auth_row = QHBoxLayout()
+        self.smb_user = QLineEdit()
+        self.smb_user.setPlaceholderText("Usuário, ex.: same ou suporte")
+        self.smb_password = QLineEdit()
+        self.smb_password.setPlaceholderText("Senha")
+        self.smb_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.smb_password.returnPressed.connect(self.search)
+        auth_row.addWidget(self.smb_user)
+        auth_row.addWidget(self.smb_password)
+        auth_layout.addLayout(auth_row)
+        note = QLabel("As credenciais são usadas somente nesta busca e na instalação selecionada.")
+        note.setObjectName("muted")
+        auth_layout.addWidget(note)
+        layout.addWidget(auth_card)
+
         self.find_status = QLabel("Aguardando pesquisa.")
         self.find_status.setObjectName("muted")
         self.find_status.setWordWrap(True)
@@ -241,9 +258,14 @@ class GuidedWindow(QMainWindow):
         if not value:
             QMessageBox.information(self, "Informe o endereço", "Digite um nome de máquina ou IP.")
             return
-        self.find_status.setText("Resolvendo nome e procurando impressoras...")
+        username = self.smb_user.text().strip()
+        password = self.smb_password.text()
+        self.find_status.setText("Resolvendo nome e procurando impressoras compartilhadas...")
         self.results.setRowCount(0)
-        self._run(lambda: HostPrinterLocator().locate(value), self._show_results)
+        self._run(
+            lambda: HostPrinterLocator().locate(value, username=username, password=password),
+            self._show_results,
+        )
 
     def _show_results(self, items: list[LocatedPrinter]) -> None:
         self.located = items
@@ -261,10 +283,10 @@ class GuidedWindow(QMainWindow):
         )
         if items:
             first = next((item for item in items if item.recommended), items[0])
-            row = items.index(first)
-            self.results.selectRow(row)
+            self.results.selectRow(items.index(first))
+            auth = " com autenticação" if first.username else ""
             self.find_status.setText(
-                f"Máquina localizada em {first.address}. {len(items)} opção(ões) encontrada(s). "
+                f"Máquina localizada em {first.address}. {len(items)} opção(ões) encontrada(s){auth}. "
                 f"Recomendação: {first.protocol}."
             )
 
@@ -286,6 +308,7 @@ class GuidedWindow(QMainWindow):
             f"Fila: {outcome.queue}\nConexão: {outcome.uri}\nDriver: {outcome.description}\n"
             f"Tentativas: {outcome.attempts}",
         )
+        self.smb_password.clear()
         self.refresh_printers()
         self.nav.setCurrentRow(2)
 

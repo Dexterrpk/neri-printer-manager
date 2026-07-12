@@ -1,8 +1,8 @@
 """Descoberta enriquecida de impressoras locais, de rede e publicadas.
 
-Combina filas já instaladas no CUPS, backends do ``lpinfo`` e anúncios DNS-SD
-obtidos pelo Avahi. O resultado informa o melhor nome conhecido, host/IP e onde
-a impressora está instalada ou publicada.
+A implementação evita depender de uma única ferramenta e nunca transforma falhas
+parciais de Avahi/CUPS em fechamento da interface. Filas locais têm prioridade e
+anúncios de rede apenas complementam nome, modelo, host e localização.
 """
 from __future__ import annotations
 
@@ -29,8 +29,18 @@ class DiscoveredPrinter:
 class RichDiscoveryService:
     """Descobre impressoras sem confundir anúncio remoto com fila instalada."""
 
+    SERVICE_TYPES = ("_ipp._tcp", "_ipps._tcp", "_printer._tcp")
+
     def __init__(self, runner: CommandRunner | None = None) -> None:
         self.runner = runner or CommandRunner(timeout=25)
+
+    @staticmethod
+    def _safe_text(value: object, fallback: str, limit: int = 240) -> str:
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value or ""))
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            text = fallback
+        return text[:limit]
 
     def discover(self) -> list[DiscoveredPrinter]:
         installed = CupsService(self.runner).list_printers()
@@ -40,15 +50,16 @@ class RichDiscoveryService:
         for printer in installed:
             uri = printer.device_uri or ""
             host, address = self._host_address(uri)
-            by_uri[uri or f"queue:{printer.name}"] = DiscoveredPrinter(
-                name=printer.name,
-                model=self._friendly_name(uri) or printer.name,
-                host=host,
-                address=address,
-                protocol=self._protocol(uri),
+            name = self._safe_text(printer.name, "Fila instalada", 127)
+            by_uri[uri or f"queue:{name}"] = DiscoveredPrinter(
+                name=name,
+                model=self._safe_text(self._friendly_name(uri), name),
+                host=self._safe_text(host, "Este computador"),
+                address=self._safe_text(address, "Local"),
+                protocol=self._safe_text(self._protocol(uri), "LOCAL", 32),
                 uri=uri,
-                location=f"Instalada neste computador como fila '{printer.name}'",
-                installed_queue=printer.name,
+                location=f"Instalada neste computador como fila '{name}'",
+                installed_queue=name,
             )
 
         if self.runner.exists("lpinfo"):
@@ -57,17 +68,18 @@ class RichDiscoveryService:
                 parts = line.split(maxsplit=1)
                 if len(parts) != 2:
                     continue
-                backend, uri = parts
-                if uri in by_uri:
+                backend, uri = parts[0].strip(), parts[1].strip()
+                if not uri or len(uri) > 2048 or uri in by_uri:
                     continue
                 host, address = self._host_address(uri)
                 queue = queue_by_uri.get(uri, "")
+                friendly = self._safe_text(self._friendly_name(uri), host or "Impressora detectada")
                 by_uri[uri] = DiscoveredPrinter(
-                    name=self._friendly_name(uri) or host or "Impressora detectada",
-                    model=self._friendly_name(uri) or "Modelo não informado",
-                    host=host,
-                    address=address,
-                    protocol=self._protocol(uri, backend),
+                    name=friendly,
+                    model=friendly,
+                    host=self._safe_text(host, "Origem não identificada"),
+                    address=self._safe_text(address, "Não informado"),
+                    protocol=self._safe_text(self._protocol(uri, backend), "DESCONHECIDO", 32),
                     uri=uri,
                     location=(
                         f"Instalada neste computador como fila '{queue}'"
@@ -99,43 +111,59 @@ class RichDiscoveryService:
     def _avahi_printers(self) -> list[DiscoveredPrinter]:
         if not self.runner.exists("avahi-browse"):
             return []
-        result = self.runner.run(
-            ["avahi-browse", "-rtkp", "_ipp._tcp", "_ipps._tcp", "_printer._tcp"],
-            check=False,
-        )
         printers: list[DiscoveredPrinter] = []
-        for raw in result.stdout.splitlines():
-            if not raw.startswith("="):
-                continue
-            fields = raw.split(";")
-            if len(fields) < 9:
-                continue
-            service_name = unquote(fields[3])
-            service_type = fields[4]
-            host = fields[6].rstrip(".")
-            address = fields[7]
-            port = fields[8]
-            txt = ";".join(fields[9:])
-            attrs = self._txt_attributes(txt)
-            model = attrs.get("ty") or attrs.get("product", "").strip("()") or service_name
-            note = attrs.get("note") or attrs.get("location") or ""
-            resource = attrs.get("rp") or "ipp/print"
-            scheme = "ipps" if service_type == "_ipps._tcp" else "ipp"
-            if service_type == "_printer._tcp":
-                scheme, resource = "lpd", attrs.get("rp") or "lp"
-            uri = f"{scheme}://{address}:{port}/{resource.lstrip('/')}"
-            printers.append(
-                DiscoveredPrinter(
-                    name=service_name,
-                    model=model or "Modelo não informado",
-                    host=host,
-                    address=address,
-                    protocol=scheme.upper(),
-                    uri=uri,
-                    location=(f"{note} — publicado por {host}" if note else f"Publicado por {host} ({address})"),
-                )
+        seen: set[str] = set()
+        # Avahi aceita um tipo por chamada. Passar vários tipos pode gerar
+        # "label empty or too long" em algumas versões.
+        for service_type in self.SERVICE_TYPES:
+            result = self.runner.run(
+                ["avahi-browse", "--resolve", "--terminate", "--parsable", service_type],
+                check=False,
             )
+            if result.returncode != 0:
+                continue
+            for raw in result.stdout.splitlines():
+                item = self._parse_avahi_line(raw)
+                if item and item.uri not in seen:
+                    seen.add(item.uri)
+                    printers.append(item)
         return printers
+
+    def _parse_avahi_line(self, raw: str) -> DiscoveredPrinter | None:
+        if not raw.startswith("="):
+            return None
+        fields = raw.split(";")
+        if len(fields) < 9:
+            return None
+        service_name = self._safe_text(unquote(fields[3]), "Impressora anunciada")
+        service_type = fields[4].strip()
+        host = self._safe_text(fields[6].rstrip("."), "Host não informado")
+        address = self._safe_text(fields[7], "IP não informado", 64)
+        port = fields[8].strip()
+        if not port.isdigit():
+            return None
+        attrs = self._txt_attributes(";".join(fields[9:]))
+        model = self._safe_text(
+            attrs.get("ty") or attrs.get("product", "").strip("()") or service_name,
+            "Modelo não informado",
+        )
+        note = self._safe_text(attrs.get("note") or attrs.get("location"), "", 180)
+        resource = self._safe_text(attrs.get("rp"), "ipp/print", 180).lstrip("/")
+        scheme = "ipps" if service_type == "_ipps._tcp" else "ipp"
+        if service_type == "_printer._tcp":
+            scheme = "lpd"
+            resource = self._safe_text(attrs.get("rp"), "lp", 180).lstrip("/")
+        uri = f"{scheme}://{address}:{port}/{resource}"
+        location = f"{note} — publicado por {host}" if note else f"Publicado por {host} ({address})"
+        return DiscoveredPrinter(
+            name=service_name,
+            model=model,
+            host=host,
+            address=address,
+            protocol=scheme.upper(),
+            uri=uri,
+            location=location,
+        )
 
     @staticmethod
     def _txt_attributes(text: str) -> dict[str, str]:

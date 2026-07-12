@@ -18,16 +18,37 @@ if ! command -v apt-get >/dev/null 2>&1; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y \
-  python3 python3-venv python3-pip \
-  cups cups-client cups-browsed cups-filters ghostscript \
+
+PACKAGES=(
+  python3 python3-venv python3-pip
+  cups cups-client cups-browsed cups-filters ghostscript
   avahi-daemon avahi-utils policykit-1 smbclient
+  libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
+  libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0
+  libegl1 libgl1
+)
+
+MISSING=()
+for package in "${PACKAGES[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q '^install ok installed$'; then
+    MISSING+=("${package}")
+  fi
+done
+
+if (( ${#MISSING[@]} > 0 )); then
+  echo "Instalando pacotes ausentes: ${MISSING[*]}"
+  apt-get update
+  apt-get install -y "${MISSING[@]}"
+else
+  echo "Todas as dependências do sistema já estão instaladas."
+fi
 
 install -d -m 0755 "${PREFIX}"
-python3 -m venv "${PREFIX}/venv"
-"${PREFIX}/venv/bin/pip" install --upgrade pip
-"${PREFIX}/venv/bin/pip" install .
+if [[ ! -x "${PREFIX}/venv/bin/python" ]]; then
+  python3 -m venv "${PREFIX}/venv"
+fi
+
+"${PREFIX}/venv/bin/pip" install --disable-pip-version-check .
 
 install -D -m 0755 packaging/libexec/neri-printer-helper "${HELPER}"
 install -D -m 0644 packaging/polkit/com.neriinfotech.printermanager.policy "${POLICY}"

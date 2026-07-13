@@ -2,7 +2,7 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.3.0
+## Versão atual: 1.3.1
 
 ### Principais recursos
 
@@ -38,9 +38,41 @@ sudo bash ./install.sh
 neri-printer-manager
 ```
 
+## Atualização rápida sem verificar pacotes APT
+
+Use somente quando as dependências já foram instaladas anteriormente:
+
+```bash
+cd ~/neri-printer-manager
+git restore install.sh 2>/dev/null || true
+git pull --ff-only
+sudo bash ./install.sh --fast
+neri-printer-manager
+```
+
+O modo `--fast` não executa `apt update` nem instala pacotes do sistema. Ele ainda cria uma instalação temporária, instala o pacote Python, executa os testes e só ativa a nova versão se tudo passar.
+
+## Reparo completo
+
+Para reinstalar todas as dependências do sistema e recriar o aplicativo:
+
+```bash
+cd ~/neri-printer-manager
+git pull --ff-only
+sudo bash ./install.sh --repair
+```
+
+## Ajuda do instalador
+
+```bash
+sudo bash ./install.sh --help
+```
+
+Sem opção, o instalador verifica os pacotes com `dpkg-query` e instala somente os que estiverem ausentes. Quando todos já estiverem instalados, o APT não é executado.
+
 O instalador é transacional:
 
-1. identifica e instala apenas dependências ausentes;
+1. identifica e instala apenas dependências ausentes, exceto no modo `--fast`;
 2. cria uma instalação temporária isolada;
 3. valida dependências com `pip check`;
 4. compila os módulos Python;
@@ -101,4 +133,4 @@ A interface roda como usuário comum. O helper administrativo aceita somente uma
 
 ## Estado de homologação
 
-A versão 1.3.0 é uma base de estabilidade com testes automatizados e rollback de instalação. A validação final de hardware e rede continua dependendo de testes reais em Linux Mint, porque modelos de impressora, firmware, drivers, regras de firewall e políticas SMB variam entre ambientes. Use `docs/HOMOLOGATION.md` para registrar cada cenário validado no HRSAJ antes da implantação ampla.
+A versão 1.3.1 possui instalação transacional, testes automatizados e rollback. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes. Use `docs/HOMOLOGATION.md` para registrar cada cenário validado no HRSAJ antes da implantação ampla.

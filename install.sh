@@ -8,10 +8,15 @@ BACKUP="/opt/${APP}.backup"
 HELPER="/usr/libexec/neri-printer-helper"
 POLICY="/usr/share/polkit-1/actions/com.neriinfotech.printermanager.policy"
 DESKTOP="/usr/share/applications/neri-printer-manager.desktop"
+LOG="/var/log/${APP}-install.log"
 
 [[ ${EUID} -eq 0 ]] || { echo "Execute com sudo: sudo bash ./install.sh" >&2; exit 1; }
 command -v apt-get >/dev/null 2>&1 || { echo "Distribuição não suportada: apt-get não encontrado." >&2; exit 1; }
 [[ -f pyproject.toml ]] || { echo "Execute o instalador dentro da pasta do projeto." >&2; exit 1; }
+
+exec > >(tee -a "$LOG") 2>&1
+echo "== Neri Printer Manager: instalação transacional =="
+date -Is
 
 export DEBIAN_FRONTEND=noninteractive
 PACKAGES=(
@@ -35,48 +40,53 @@ else
  echo "Todas as dependências do sistema já estão instaladas."
 fi
 
-cleanup() {
- rm -rf "$STAGING"
+cleanup() { rm -rf "$STAGING"; }
+rollback() {
+ echo "Falha durante a ativação. Restaurando versão anterior..." >&2
+ rm -rf "$PREFIX"
+ [[ -d "$BACKUP" ]] && mv "$BACKUP" "$PREFIX"
 }
 trap cleanup EXIT
-rm -rf "$STAGING"
+rm -rf "$STAGING" "$BACKUP"
 python3 -m venv "$STAGING/venv"
 "$STAGING/venv/bin/python" -m pip install --upgrade pip setuptools wheel
 "$STAGING/venv/bin/python" -m pip install '.[dev]'
 
-# Os testes usam exatamente o Python e o PySide6 que serão instalados.
-echo "Executando testes no ambiente de instalação..."
+# Valida a consistência do ambiente que será instalado.
+"$STAGING/venv/bin/python" -m pip check
+"$STAGING/venv/bin/python" -m compileall -q "$STAGING/venv/lib" src
+
+echo "Executando testes automatizados no ambiente de instalação..."
 QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
  "$STAGING/venv/bin/python" -m pytest -q || {
    echo "Os testes falharam. A versão atualmente instalada foi preservada." >&2
    exit 1
  }
 
-# Teste de importação e criação da janela sem iniciar o loop gráfico.
+# Smoke test gráfico: importa todos os módulos principais e constrói a janela.
 QT_QPA_PLATFORM=offscreen "$STAGING/venv/bin/python" - <<'PY'
 from PySide6.QtWidgets import QApplication
+from neri_printer_manager.core import CupsService, DiagnosticService, JobService
+from neri_printer_manager.device_discovery import RichDiscoveryService
+from neri_printer_manager.host_locator import HostPrinterLocator
 from neri_printer_manager.safe_app import SafeEnhancedWindow
+from neri_printer_manager.usb import UsbPrinterService
 app = QApplication.instance() or QApplication([])
 window = SafeEnhancedWindow(auto_refresh=False)
+assert window.pages.count() >= 7
 window.close()
-print("Teste gráfico: OK")
+print("Teste gráfico e importações: OK")
 PY
 
-rm -rf "$BACKUP"
+# Só troca a versão ativa depois de todos os testes passarem.
 if [[ -d "$PREFIX" ]]; then mv "$PREFIX" "$BACKUP"; fi
-if ! mv "$STAGING" "$PREFIX"; then
- [[ -d "$BACKUP" ]] && mv "$BACKUP" "$PREFIX"
- echo "Não foi possível ativar a nova versão; a versão anterior foi restaurada." >&2
- exit 1
-fi
+if ! mv "$STAGING" "$PREFIX"; then rollback; exit 1; fi
 trap - EXIT
 
 if ! install -D -m 0755 packaging/libexec/neri-printer-helper "$HELPER" || \
    ! install -D -m 0644 packaging/polkit/com.neriinfotech.printermanager.policy "$POLICY" || \
    ! install -D -m 0644 packaging/debian/neri-printer-manager.desktop "$DESKTOP"; then
- rm -rf "$PREFIX"
- [[ -d "$BACKUP" ]] && mv "$BACKUP" "$PREFIX"
- echo "Falha ao instalar arquivos do sistema; versão anterior restaurada." >&2
+ rollback
  exit 1
 fi
 
@@ -87,8 +97,13 @@ chmod 0755 /usr/local/bin/neri-printer-manager /usr/local/bin/neri-printer-cli
 systemctl enable --now cups.service avahi-daemon.service
 systemctl enable --now smbd.service 2>/dev/null || true
 update-desktop-database >/dev/null 2>&1 || true
+
+# Validação final dos atalhos e do pacote instalado.
+"$PREFIX/venv/bin/python" -m pip check
+/usr/local/bin/neri-printer-cli --help >/dev/null
 rm -rf "$BACKUP"
 
 VERSION=$("$PREFIX/venv/bin/python" -m pip show neri-printer-manager | awk '/^Version:/{print $2}')
 echo "Instalação concluída. Versão: ${VERSION:-desconhecida}"
+echo "Log: $LOG"
 echo "Execute: neri-printer-manager"

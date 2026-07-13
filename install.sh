@@ -97,7 +97,9 @@ python3 -m venv "$STAGING/venv"
 "$STAGING/venv/bin/python" -m pip install '.[dev]'
 
 "$STAGING/venv/bin/python" -m pip check
-"$STAGING/venv/bin/python" -m compileall -q "$STAGING/venv/lib" src
+# Compila somente o código do projeto. Não compila site-packages, pois o PySide6
+# inclui arquivos de template *.tmpl.py que não são módulos Python válidos.
+"$STAGING/venv/bin/python" -m compileall -q src/neri_printer_manager
 
 echo "Executando testes automatizados no ambiente de instalação..."
 QT_QPA_PLATFORM=offscreen PYTHONPATH=src \

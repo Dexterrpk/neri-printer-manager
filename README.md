@@ -2,7 +2,7 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.3.2
+## Versão atual: 1.3.3
 
 ### Principais recursos
 
@@ -18,20 +18,10 @@ Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar im
 
 ## Instalação ou atualização no Linux Mint
 
-Cole **uma única linha** no terminal:
+Cole uma única linha no terminal:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
-```
-
-Esse comando atualiza ou baixa o projeto, executa a instalação rápida e abre o programa.
-
-### Instalação normal
-
-Verifica os pacotes do sistema e instala somente os que estiverem ausentes:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --normal
 ```
 
 ### Atualização rápida
@@ -42,15 +32,19 @@ Use quando o programa e as dependências já foram instalados anteriormente:
 curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --fast
 ```
 
-### Reparo completo
+### Instalação normal
 
-Reinstala dependências e recria o aplicativo:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --normal
+```
+
+### Reparo completo
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --repair
 ```
 
-O instalador é transacional: prepara uma versão temporária, valida dependências, executa testes e somente depois substitui a instalação atual. Em caso de falha, preserva ou restaura a versão anterior.
+O instalador cria uma versão temporária, valida dependências, compila somente o código do Neri Printer Manager, executa os testes e somente depois substitui a instalação atual. O PySide6 não é compilado pelo `compileall`, pois contém arquivos de template que não são módulos Python.
 
 ## Comandos depois da instalação
 
@@ -101,4 +95,4 @@ A interface roda como usuário comum. O helper administrativo aceita somente uma
 
 ## Estado de homologação
 
-A versão 1.3.2 possui instalação transacional, testes automatizados e rollback. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes.
+A versão 1.3.3 possui instalação transacional, testes automatizados e rollback. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes.

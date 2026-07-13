@@ -65,34 +65,53 @@ class EnhancedWindow(GuidedWindow):
         layout.addLayout(row)
         return page
 
+    @staticmethod
+    def _discover_with_display_names() -> list[tuple[Any, str]]:
+        """Executa descoberta e resolução de nomes integralmente fora da thread da UI.
+
+        DNS reverso e NetBIOS são best-effort: falhas e timeouts não eliminam a
+        impressora encontrada e nunca chegam ao callback gráfico.
+        """
+        items = RichDiscoveryService().discover()
+        resolver = HostDisplayResolver()
+        try:
+            names = resolver.resolve_many((item.host, item.address) for item in items)
+        except Exception:
+            names = [
+                item.host
+                if item.host and item.host != item.address
+                else "Não identificado"
+                for item in items
+            ]
+        return list(zip(items, names, strict=True))
+
     def discover_devices(self) -> None:
         self.tools_status.setText(
             "Consultando filas locais e rede. A resolução de nomes possui timeout seguro."
         )
-        self._run(RichDiscoveryService().discover, self._show_discovered)
+        self.tools_table.setRowCount(0)
+        self._run(self._discover_with_display_names, self._show_discovered)
 
-    def _show_discovered(self, items: list[Any]) -> None:
-        resolver = HostDisplayResolver()
-        display_hosts = resolver.resolve_many((item.host, item.address) for item in items)
+    def _show_discovered(self, resolved: list[tuple[Any, str]]) -> None:
         rows = []
-        for item, display_host in zip(items, display_hosts, strict=True):
+        for item, display_host in resolved:
             display_ip = item.address if item.address and item.address != "Local" else "Local"
             rows.append(
                 (
-                    item.name,
-                    item.model,
-                    display_host,
+                    item.name or "Impressora sem nome",
+                    item.model or "Modelo não informado",
+                    display_host or "Não identificado",
                     display_ip,
-                    item.protocol,
+                    item.protocol or "Desconhecido",
                     item.installed_queue or "Não instalada",
                 )
             )
         self._fill(self.tools_table, rows)
-        installed = sum(1 for item in items if item.installed_queue)
-        remote = len(items) - installed
+        installed = sum(1 for item, _ in resolved if item.installed_queue)
+        remote = len(resolved) - installed
         self.tools_status.setText(
-            f"{len(items)} impressora(s) identificada(s): {installed} instalada(s) neste computador e {remote} disponível(is) na rede."
-            if items
+            f"{len(resolved)} impressora(s) identificada(s): {installed} instalada(s) neste computador e {remote} disponível(is) na rede."
+            if resolved
             else "Nenhuma impressora foi identificada. Verifique CUPS, Avahi e conectividade da rede."
         )
 

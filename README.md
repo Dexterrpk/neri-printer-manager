@@ -2,7 +2,7 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.4.3
+## Versão atual: 1.5.0
 
 ### Principais recursos
 
@@ -11,7 +11,8 @@ Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar im
 - Descoberta com nome, modelo, hostname, IP, protocolo e fila local separados.
 - Seleção automática de PPD/driver com HPLIP, HPCUPS, Gutenprint e Foomatic.
 - Driver PCL/PostScript genérico somente como último recurso.
-- Instalação USB, compartilhamento, diagnóstico, filtros, filas e relatórios.
+- Instalação USB, compartilhamento, filas, relatórios e pacote de suporte.
+- Central de saúde com diagnóstico explicável, correção selecionada, correção automática segura e verificação pós-reparo.
 
 ## Instalação universal — método recomendado
 
@@ -34,7 +35,7 @@ O instalador escolhe a autenticação nesta ordem:
 3. usa `su` somente quando não houver agente PolicyKit disponível;
 4. encerra com uma mensagem clara quando nenhuma credencial administrativa válida estiver disponível.
 
-Na versão 1.4.3, o script não faz mais uma autenticação de teste separada. A senha é solicitada na **primeira operação administrativa real**. Depois disso, `sudo` ou PolicyKit podem manter a autorização em cache por alguns minutos; nesse caso, as etapas seguintes não pedem a senha novamente. Isso é comportamento normal do Linux e não significa que a instalação esteja sem autenticação.
+A senha é solicitada na primeira operação administrativa real. Depois disso, `sudo` ou PolicyKit podem manter a autorização em cache por alguns minutos; isso é comportamento normal do Linux.
 
 > A senha pedida pelo `su` é a senha do **root**, e pode ser diferente da senha do usuário comum. Em instalações Mint com root bloqueado, autorize pela janela gráfica do PolicyKit ou peça a um administrador da máquina.
 
@@ -65,6 +66,38 @@ wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/
 ```
 
 O reparo reinstala as dependências do sistema, recria o ambiente Python e reconfigura serviços, atalhos e permissões.
+
+## Central de saúde e correção
+
+Abra **Central de saúde e correção** e clique em **Fazer diagnóstico completo**.
+
+A versão 1.5.0 verifica de forma independente:
+
+- dependências obrigatórias;
+- serviço e agendador do CUPS;
+- porta local 631;
+- Avahi/mDNS;
+- Samba;
+- filas instaladas e filas desativadas;
+- trabalhos pendentes;
+- disponibilidade do PolicyKit;
+- filtros, backends, PPDs e Ghostscript.
+
+A tela mostra quatro informações por linha:
+
+1. área afetada;
+2. situação em linguagem clara (`OK`, `ATENÇÃO` ou `PROBLEMA`);
+3. o que foi encontrado;
+4. solução recomendada.
+
+### Botões
+
+- **Ver detalhes:** mostra a causa e a evidência técnica.
+- **Corrigir selecionado:** executa somente a ação da linha escolhida.
+- **Corrigir automaticamente:** aplica apenas ações consideradas seguras, como instalar componentes obrigatórios, ativar serviços e reiniciar o CUPS.
+- Depois de cada reparo, o programa repete o diagnóstico e informa se o problema realmente desapareceu.
+
+O programa não altera automaticamente credenciais, endereço de impressora ou escolha específica de driver. Esses casos mostram uma orientação objetiva para evitar quebrar filas funcionais.
 
 ## Depois da instalação
 
@@ -110,8 +143,8 @@ O programa usa as credenciais durante a instalação, procura o melhor PPD dispo
 
 ## Segurança
 
-A interface roda como usuário comum. Ações administrativas usam PolicyKit. Nomes de filas, URIs e pacotes são validados e nenhum comando externo é executado com `shell=True`.
+A interface roda como usuário comum. Ações administrativas usam PolicyKit. O helper aceita somente pacotes, serviços e operações presentes em uma lista interna. Nomes de filas e URIs são validados e nenhum comando externo é executado com `shell=True`.
 
 ## Estado de homologação
 
-A versão 1.4.3 solicita autenticação apenas na primeira ação administrativa real e usa caminhos absolutos para `apt-get`, `env` e `bash`. A confirmação final de impressão ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.
+A versão 1.5.0 reorganiza a correção de erros em uma central unificada, com ações limitadas, confirmação e verificação pós-reparo. A confirmação final de impressão ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.

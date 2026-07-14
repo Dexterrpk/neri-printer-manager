@@ -14,13 +14,14 @@ ACTIVE_ROOT=""
 
 usage() {
   cat <<'EOF'
-Uso: sudo bash ./install.sh [opção]
+Uso: bash ./install.sh [opção]
 
 Opções:
   --fast      Reutiliza o ambiente Python íntegro e atualiza somente o aplicativo.
   --repair    Reinstala todas as dependências APT e recria o aplicativo.
   --help      Mostra esta ajuda.
 
+Execute como root, usando sudo ou su. O programa deve ser aberto depois como usuário comum.
 Sem opção, o instalador verifica e instala somente os pacotes ausentes e cria
 um ambiente novo antes de ativar a atualização.
 EOF
@@ -40,7 +41,11 @@ while (($# > 0)); do
   shift
 done
 
-[[ ${EUID} -eq 0 ]] || { echo "Execute com sudo: sudo bash ./install.sh" >&2; exit 1; }
+[[ ${EUID} -eq 0 ]] || {
+  echo "Este instalador precisa de privilégios administrativos." >&2
+  echo "Use: sudo bash ./install.sh  ou  su -c \"cd '$PWD' && bash ./install.sh\"" >&2
+  exit 1
+}
 command -v apt-get >/dev/null 2>&1 || { echo "Distribuição não suportada: apt-get não encontrado." >&2; exit 1; }
 [[ -f pyproject.toml ]] || { echo "Execute o instalador dentro da pasta do projeto." >&2; exit 1; }
 
@@ -61,13 +66,10 @@ PACKAGES=(
 
 if [[ "$MODE" == "fast" ]]; then
   echo "Modo rápido: pacotes APT não serão consultados nem reinstalados."
-  for command in python3 git; do
-    command -v "$command" >/dev/null 2>&1 || {
-      echo "Comando obrigatório ausente: $command" >&2
-      echo "Execute: sudo bash ./install.sh" >&2
-      exit 1
-    }
-  done
+  command -v python3 >/dev/null 2>&1 || {
+    echo "Python 3 ausente. Execute a instalação normal." >&2
+    exit 1
+  }
 elif [[ "$MODE" == "repair" ]]; then
   echo "Modo reparo: reinstalando dependências do sistema."
   apt-get update
@@ -154,8 +156,17 @@ if ! install -D -m 0755 packaging/libexec/neri-printer-helper "$HELPER" || \
   exit 1
 fi
 
-printf '#!/usr/bin/env bash\nexec "%s/venv/bin/neri-printer-manager" "$@"\n' "$PREFIX" > /usr/local/bin/neri-printer-manager
-printf '#!/usr/bin/env bash\nexec "%s/venv/bin/neri-printer-cli" "$@"\n' "$PREFIX" > /usr/local/bin/neri-printer-cli
+# Não chama os scripts gerados pelo pip diretamente. Quando um venv temporário é
+# movido para /opt, esses scripts podem manter o caminho antigo no shebang.
+# Os launchers abaixo usam o Python definitivo e funcionam após sudo ou su.
+cat > /usr/local/bin/neri-printer-manager <<EOF
+#!/usr/bin/env bash
+exec "$PREFIX/venv/bin/python" -m neri_printer_manager.safe_app "\$@"
+EOF
+cat > /usr/local/bin/neri-printer-cli <<EOF
+#!/usr/bin/env bash
+exec "$PREFIX/venv/bin/python" -m neri_printer_manager.cli "\$@"
+EOF
 chmod 0755 /usr/local/bin/neri-printer-manager /usr/local/bin/neri-printer-cli
 
 systemctl enable --now cups.service avahi-daemon.service
@@ -164,10 +175,11 @@ update-desktop-database >/dev/null 2>&1 || true
 
 "$PREFIX/venv/bin/python" -m pip check
 /usr/local/bin/neri-printer-cli --help >/dev/null
+QT_QPA_PLATFORM=offscreen "$PREFIX/venv/bin/python" -c 'import neri_printer_manager.safe_app'
 rm -rf "$BACKUP"
 
 VERSION=$("$PREFIX/venv/bin/python" -m pip show neri-printer-manager | awk '/^Version:/{print $2}')
 echo "Instalação concluída. Versão: ${VERSION:-desconhecida}"
 echo "Modo utilizado: $MODE"
 echo "Log: $LOG"
-echo "Execute como usuário comum: neri-printer-manager"
+echo "Saia do root e execute como usuário comum: neri-printer-manager"

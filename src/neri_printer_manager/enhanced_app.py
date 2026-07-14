@@ -6,16 +6,16 @@ from typing import Any
 
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QMessageBox
 
-from .cups_filters import CupsFilterService
 from .device_discovery import RichDiscoveryService
 from .guided_app import GuidedWindow
+from .health import HealthAction, HealthCheck, PrinterHealthService
 from .host_display import HostDisplayResolver
 from .logging_config import configure_logging
-from .repair import RepairResult, RepairService
+from .repair import RepairResult, RepairService, RepairStatus
 
 
 class EnhancedWindow(GuidedWindow):
-    """Mantém todos os módulos existentes e melhora ferramentas e filtros."""
+    """Mantém todos os módulos existentes e melhora ferramentas e diagnóstico."""
 
     def _tools(self):
         page, layout = self._page(
@@ -47,40 +47,41 @@ class EnhancedWindow(GuidedWindow):
 
     def _diagnostics(self):
         page, layout = self._page(
-            "Correção e diagnóstico",
-            "Analisa somente falhas atuais. Cada correção mostra o que será feito e confirma se o problema desapareceu.",
+            "Central de saúde e correção",
+            "O programa verifica serviços, dependências, filas, trabalhos, permissões, filtros e drivers. Selecione um problema para ver a causa e aplicar uma solução verificável.",
         )
-        self.diag_summary = QLabel("Clique em Verificar tudo ou Analisar filtros atuais.")
+        self.health_checks: list[HealthCheck] = []
+        self.diag_summary = QLabel("Clique em Fazer diagnóstico completo.")
         self.diag_summary.setObjectName("muted")
         self.diag_summary.setWordWrap(True)
         layout.addWidget(self.diag_summary)
-        self.diag_table = self._table(["Problema", "Estado", "Origem / evidência", "Ação segura"])
+        self.diag_table = self._table(["Área", "Situação", "O que foi encontrado", "Solução recomendada"])
         layout.addWidget(self.diag_table, 1)
         row = QHBoxLayout()
-        row.addWidget(self._button("Verificar tudo", self.refresh_diagnostics, True))
-        row.addWidget(self._button("Instalar dependências", self.repair_dependencies))
-        row.addWidget(self._button("Analisar filtros atuais", self.refresh_filters))
-        row.addWidget(self._button("Aplicar correção selecionada", self.repair_filter))
+        row.addWidget(self._button("Fazer diagnóstico completo", self.refresh_diagnostics, True))
+        row.addWidget(self._button("Ver detalhes", self.show_health_details))
+        row.addWidget(self._button("Corrigir selecionado", self.repair_selected_health))
+        row.addWidget(self._button("Corrigir automaticamente", self.repair_all_safe))
         row.addStretch()
         layout.addLayout(row)
+        note = QLabel(
+            "Correções automáticas são limitadas a ações seguras: instalar componentes obrigatórios, ativar serviços, reiniciar o CUPS e corrigir filtros confirmados. Filas, credenciais e drivers específicos exigem sua confirmação."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        layout.addWidget(note)
         return page
 
     @staticmethod
     def _discover_with_display_names() -> list[tuple[Any, str]]:
-        """Executa descoberta e resolução de nomes integralmente fora da thread da UI.
-
-        DNS reverso e NetBIOS são best-effort: falhas e timeouts não eliminam a
-        impressora encontrada e nunca chegam ao callback gráfico.
-        """
+        """Executa descoberta e resolução de nomes integralmente fora da thread da UI."""
         items = RichDiscoveryService().discover()
         resolver = HostDisplayResolver()
         try:
             names = resolver.resolve_many((item.host, item.address) for item in items)
         except Exception:
             names = [
-                item.host
-                if item.host and item.host != item.address
-                else "Não identificado"
+                item.host if item.host and item.host != item.address else "Não identificado"
                 for item in items
             ]
         return list(zip(items, names, strict=True))
@@ -115,63 +116,111 @@ class EnhancedWindow(GuidedWindow):
             else "Nenhuma impressora foi identificada. Verifique CUPS, Avahi e conectividade da rede."
         )
 
-    def refresh_filters(self) -> None:
-        self.diag_summary.setText("Analisando apenas erros recentes e a integridade atual dos filtros...")
-        self._run(CupsFilterService().diagnose, self._show_filters)
+    def refresh_diagnostics(self) -> None:
+        self.diag_summary.setText("Verificando o ambiente completo sem interromper a interface...")
+        self.diag_table.setRowCount(0)
+        self._run(PrinterHealthService().run_all, self._show_health)
 
-    def _show_filters(self, items: list[Any]) -> None:
-        self.filter_findings = items
-        if not items:
-            self._fill(self.diag_table, [])
-            self.diag_summary.setText(
-                "Nenhuma falha atual de filtro, backend, PPD ou Ghostscript foi encontrada."
-            )
-            return
-        action_names = {
-            "reinstall_filters": "Reinstalar componentes CUPS",
-            "reinstall_ghostscript": "Reinstalar Ghostscript",
-            "check_ppd": "Recriar fila ou escolher outro driver",
-            "fix_permissions": "Corrigir somente permissões oficiais do CUPS",
-            "restart_cups": "Reiniciar CUPS",
-            "check_backend": "Verificar URI, rede ou credenciais",
-            "clear_stale_jobs": "Limpar trabalhos travados",
-        }
+    def _show_health(self, items: list[HealthCheck]) -> None:
+        self.health_checks = items
+        status_names = {"ok": "OK", "warning": "ATENÇÃO", "error": "PROBLEMA"}
         self._fill(
             self.diag_table,
             [
                 (
-                    item.title,
-                    item.severity.value,
-                    f"{item.source}: {item.evidence}",
-                    "; ".join(action_names.get(action.value, action.value) for action in item.actions)
-                    or "Somente orientação; nenhuma alteração automática",
+                    item.category,
+                    status_names.get(item.severity.value, item.severity.value),
+                    f"{item.title}: {item.summary}",
+                    item.action_label,
                 )
                 for item in items
             ],
         )
-        self.diag_summary.setText(
-            f"{len(items)} condição(ões) atual(is) encontrada(s). Selecione uma linha para corrigir somente aquele problema."
+        errors = sum(item.severity.value == "error" for item in items)
+        warnings = sum(item.severity.value == "warning" for item in items)
+        ok = sum(item.severity.value == "ok" for item in items)
+        if errors == 0 and warnings == 0:
+            text = f"Ambiente saudável: {ok} verificações concluídas sem problemas."
+        else:
+            text = f"Diagnóstico concluído: {ok} OK, {warnings} aviso(s) e {errors} problema(s). Selecione uma linha para corrigir ou entender a causa."
+        self.diag_summary.setText(text)
+        first_problem = next((index for index, item in enumerate(items) if item.severity.value != "ok"), None)
+        if first_problem is not None:
+            self.diag_table.selectRow(first_problem)
+
+    def _selected_health(self) -> HealthCheck | None:
+        row = self.diag_table.currentRow()
+        if row < 0 or row >= len(self.health_checks):
+            QMessageBox.information(self, "Selecione uma verificação", "Escolha uma linha do diagnóstico.")
+            return None
+        return self.health_checks[row]
+
+    def show_health_details(self) -> None:
+        item = self._selected_health()
+        if item is None:
+            return
+        QMessageBox.information(
+            self,
+            item.title,
+            f"Área: {item.category}\nEstado: {item.severity.value.upper()}\n\nResumo:\n{item.summary}\n\nDetalhes técnicos:\n{item.details}\n\nSolução:\n{item.action_label}",
         )
 
-    def repair_filter(self) -> None:
-        row = self.diag_table.currentRow()
-        if row < 0 or row >= len(self.filter_findings):
-            QMessageBox.information(self, "Selecione", "Analise os filtros e escolha uma condição atual.")
+    def repair_selected_health(self) -> None:
+        item = self._selected_health()
+        if item is None:
             return
-        finding = self.filter_findings[row]
+        if item.action is HealthAction.NONE:
+            QMessageBox.information(self, "Nenhuma correção necessária", item.summary)
+            return
         answer = QMessageBox.question(
             self,
             "Confirmar correção",
-            f"Problema: {finding.title}\n\nEvidência: {finding.evidence}\n\nAplicar somente as ações indicadas para esta condição?",
+            f"Problema: {item.title}\n\nO programa encontrou:\n{item.summary}\n\nAção proposta:\n{item.action_label}\n\nContinuar?",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._run(lambda: RepairService().repair_filter_finding(finding), self._show_repair_results)
+        self.diag_summary.setText(f"Aplicando correção: {item.action_label}...")
+        self._run(lambda: RepairService().repair_health_check(item), self._show_repair_results)
+
+    def repair_all_safe(self) -> None:
+        candidates = [item for item in self.health_checks if item.safe_automatic and item.severity.value != "ok"]
+        if not candidates:
+            QMessageBox.information(self, "Ambiente", "Nenhuma correção automática segura está pendente.")
+            return
+        labels = "\n".join(f"• {item.title}: {item.action_label}" for item in candidates)
+        answer = QMessageBox.question(
+            self,
+            "Corrigir problemas seguros",
+            f"Serão aplicadas somente estas correções seguras:\n\n{labels}\n\nProblemas de credencial, endereço ou escolha manual de driver não serão alterados. Continuar?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.diag_summary.setText("Aplicando correções seguras e verificando o resultado...")
+        self._run(lambda: RepairService().repair_safe_checks(candidates), self._show_repair_results)
+
+    # Compatibilidade com chamadas da interface anterior.
+    def refresh_filters(self) -> None:
+        self.refresh_diagnostics()
+
+    def repair_filter(self) -> None:
+        self.repair_selected_health()
 
     def _show_repair_results(self, results: list[RepairResult]) -> None:
-        text = "\n".join(f"• {item.action}: {item.status.value} — {item.message}" for item in results)
-        QMessageBox.information(self, "Resultado da correção", text or "Nenhuma ação necessária.")
-        self.refresh_filters()
+        status_names = {
+            RepairStatus.SUCCESS: "RESOLVIDO",
+            RepairStatus.FAILED: "NÃO RESOLVIDO",
+            RepairStatus.SKIPPED: "ORIENTAÇÃO",
+        }
+        text = "\n".join(
+            f"• {status_names.get(item.status, item.status.value)} — {item.message}"
+            for item in results
+        )
+        failures = any(item.status is RepairStatus.FAILED for item in results)
+        if failures:
+            QMessageBox.warning(self, "Resultado da correção", text or "A correção não foi concluída.")
+        else:
+            QMessageBox.information(self, "Resultado da correção", text or "Nenhuma ação necessária.")
+        self.refresh_diagnostics()
 
 
 def main() -> int:

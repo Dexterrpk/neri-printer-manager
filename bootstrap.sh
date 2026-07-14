@@ -20,7 +20,6 @@ EOF
   *) echo "Opção inválida: $MODE" >&2; exit 2 ;;
 esac
 
-# O bootstrap deve ser iniciado na sessão do usuário que utilizará o programa.
 if [[ ${EUID} -eq 0 ]]; then
   TARGET_USER="${NERI_TARGET_USER:-${SUDO_USER:-$(logname 2>/dev/null || true)}}"
   [[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]] || {
@@ -56,42 +55,30 @@ choose_root_method() {
     return 0
   fi
 
-  # Evita pedir a senha do próprio usuário quando ele claramente não é administrador.
   if command -v sudo >/dev/null 2>&1 && user_is_admin_group; then
-    echo "== Autenticação administrativa pelo sudo =="
-    if sudo -v; then
-      ROOT_METHOD="sudo"
-      return 0
-    fi
-    echo "O sudo não autorizou este usuário; tentando autenticação gráfica." >&2
+    ROOT_METHOD="sudo"
+    echo "== A autenticação administrativa será solicitada pelo sudo =="
+    return 0
   fi
 
-  # No desktop Mint, o PolicyKit permite escolher/informar uma conta administrativa.
+  # Não executa um teste separado com pkexec. A primeira ação administrativa real
+  # abre a janela do PolicyKit, evitando a impressão de que a senha foi ignorada.
   if command -v pkexec >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-    echo "== Solicitando uma conta administrativa pelo PolicyKit =="
-    if pkexec /usr/bin/true; then
-      ROOT_METHOD="pkexec"
-      return 0
-    fi
-    echo "A autenticação gráfica foi cancelada ou recusada." >&2
+    ROOT_METHOD="pkexec"
+    echo "== Uma janela do PolicyKit solicitará uma conta administrativa =="
+    return 0
   fi
 
-  # Último recurso para instalações com uma senha root realmente habilitada.
   if command -v su >/dev/null 2>&1; then
-    echo "== Última alternativa: autenticação com a senha do root =="
-    echo "Atenção: esta é a senha do root, não necessariamente a senha do usuário $TARGET_USER."
-    if su -c /usr/bin/true; then
-      ROOT_METHOD="su"
-      return 0
-    fi
+    ROOT_METHOD="su"
+    echo "== Será solicitada a senha da conta root pelo su =="
+    echo "Atenção: não é necessariamente a senha do usuário $TARGET_USER."
+    return 0
   fi
 
   cat >&2 <<EOF
-Não foi possível obter privilégios administrativos.
-
-Peça a um administrador da máquina para executar este comando na sessão de $TARGET_USER,
-ou autorizar a janela gráfica do PolicyKit quando ela aparecer.
-O instalador não consegue criar permissões administrativas sem uma credencial válida.
+Não foi encontrado um método de autenticação administrativa.
+Peça a um administrador para instalar sudo/PolicyKit ou executar o instalador para o usuário $TARGET_USER.
 EOF
   exit 1
 }
@@ -100,12 +87,27 @@ run_root() {
   choose_root_method
   case "$ROOT_METHOD" in
     root) "$@" ;;
-    sudo) sudo "$@" ;;
-    pkexec) pkexec "$@" ;;
+    sudo)
+      if ! sudo "$@"; then
+        echo "O sudo recusou a autenticação ou a operação administrativa falhou." >&2
+        exit 1
+      fi
+      ;;
+    pkexec)
+      if ! pkexec "$@"; then
+        echo "A autenticação do PolicyKit foi cancelada, recusada ou não há agente gráfico ativo." >&2
+        echo "Entre com uma conta administrativa na janela exibida ou peça ajuda ao administrador." >&2
+        exit 1
+      fi
+      ;;
     su)
       local command
       command="$(quote_command "$@")"
-      su -c "$command"
+      if ! su -c "$command"; then
+        echo "A senha root foi recusada ou a conta root está desabilitada." >&2
+        echo "Use uma conta administrativa pelo PolicyKit ou sudo." >&2
+        exit 1
+      fi
       ;;
     *) echo "Método administrativo inválido." >&2; exit 1 ;;
   esac
@@ -114,8 +116,8 @@ run_root() {
 ensure_download_tools() {
   if command -v git >/dev/null 2>&1; then return; fi
   echo "== Instalando ferramenta necessária para baixar o projeto =="
-  run_root apt-get update
-  run_root apt-get install -y git ca-certificates
+  run_root /usr/bin/apt-get update
+  run_root /usr/bin/apt-get install -y git ca-certificates
 }
 
 ensure_download_tools
@@ -147,7 +149,7 @@ else
 fi
 
 echo "== Instalando para o usuário $TARGET_USER (modo ${INSTALL_MODE#--}) =="
-run_root env NERI_TARGET_USER="$TARGET_USER" bash "$PROJECT_DIR/install.sh" "${INSTALL_ARGS[@]}"
+run_root /usr/bin/env NERI_TARGET_USER="$TARGET_USER" /usr/bin/bash "$PROJECT_DIR/install.sh" "${INSTALL_ARGS[@]}"
 
 hash -r
 if ! command -v neri-printer-manager >/dev/null 2>&1; then
@@ -159,7 +161,6 @@ echo
 echo "Instalação concluída para $TARGET_USER."
 echo "Abra pelo menu ou execute: neri-printer-manager"
 
-# Só abre automaticamente dentro da sessão gráfica do usuário comum.
 if [[ ${EUID} -ne 0 && -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   nohup neri-printer-manager >/tmp/neri-printer-manager-start.log 2>&1 &
 fi

@@ -2,7 +2,7 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.3.3
+## Versão atual: 1.3.5
 
 ### Principais recursos
 
@@ -16,42 +16,68 @@ Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar im
 - Filas CUPS: listar, instalar, remover, pausar, retomar e imprimir página de teste.
 - Diagnóstico orientado de CUPS, filtros, PPDs, backends, permissões e dependências.
 
-## Instalação ou atualização no Linux Mint
-
-Cole uma única linha no terminal:
+## Primeira instalação no Linux Mint
 
 ```bash
-sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
+sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --normal
 ```
 
-### Atualização rápida
+A instalação normal verifica os pacotes do sistema e baixa somente os que estiverem ausentes.
 
-Use quando o programa e as dependências já foram instalados anteriormente:
+## Atualização mais rápida
+
+Use depois que o programa já estiver instalado:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --fast
+cd ~/neri-printer-manager
+git restore install.sh 2>/dev/null || true
+git pull --ff-only
+sudo bash ./install.sh --fast
 ```
 
-### Instalação normal
+O modo `--fast`:
+
+- não executa `apt update`;
+- não consulta nem reinstala pacotes APT;
+- reutiliza o PySide6 e as demais dependências Python já instaladas quando o ambiente está íntegro;
+- reinstala somente o pacote do Neri Printer Manager;
+- executa testes e teste gráfico antes de concluir;
+- mantém uma cópia para rollback durante a atualização;
+- cria um ambiente novo automaticamente se detectar corrupção ou dependência ausente.
+
+## Instalação normal pelo repositório
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --normal
+cd ~/neri-printer-manager
+git restore install.sh 2>/dev/null || true
+git pull --ff-only
+sudo bash ./install.sh
 ```
 
-### Reparo completo
+## Reparo completo
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --repair
+cd ~/neri-printer-manager
+git pull --ff-only
+sudo bash ./install.sh --repair
 ```
 
-O instalador cria uma versão temporária, valida dependências, compila somente o código do Neri Printer Manager, executa os testes e somente depois substitui a instalação atual. O PySide6 não é compilado pelo `compileall`, pois contém arquivos de template que não são módulos Python.
+O modo `--repair` reinstala as dependências do sistema e recria o ambiente do aplicativo.
 
 ## Comandos depois da instalação
 
+Abra o programa como usuário comum:
+
 ```bash
 neri-printer-manager
+```
+
+Verificação:
+
+```bash
 neri-printer-cli --help
 /opt/neri-printer-manager/venv/bin/python -m pip show neri-printer-manager | grep Version
+/opt/neri-printer-manager/venv/bin/python -m pip check
 ```
 
 Log da instalação:
@@ -95,4 +121,4 @@ A interface roda como usuário comum. O helper administrativo aceita somente uma
 
 ## Estado de homologação
 
-A versão 1.3.3 possui instalação transacional, testes automatizados e rollback. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes.
+A versão 1.3.5 possui instalação transacional, atualização rápida com reutilização segura do ambiente, testes automatizados e rollback. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes.

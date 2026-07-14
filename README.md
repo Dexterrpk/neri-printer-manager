@@ -2,7 +2,7 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.4.1
+## Versão atual: 1.4.2
 
 ### Principais recursos
 
@@ -15,34 +15,38 @@ Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar im
 
 ## Instalação universal — método recomendado
 
-Execute **como o usuário comum que utilizará o programa**, sem entrar antes em um shell root:
+Execute **como o usuário comum que utilizará o programa**, sem entrar antes em `su` ou em um shell root:
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
 ```
 
-O instalador detecta automaticamente o ambiente:
-
-- usa `sudo` quando o usuário possui permissão;
-- usa `su` e solicita a senha do root quando o usuário não possui `sudo`;
-- identifica o usuário comum e sua pasta pessoal;
-- baixa ou atualiza o projeto;
-- escolhe instalação normal na primeira execução e modo rápido nas atualizações;
-- verifica os pacotes já instalados;
-- baixa somente as dependências ausentes;
-- configura CUPS, Avahi e Samba;
-- adiciona o usuário aos grupos `lp`, `lpadmin` e `sambashare`, quando existirem;
-- instala o atalho global e um atalho no menu do usuário;
-- valida dependências, testes e abertura da interface antes de concluir;
-- preserva a versão anterior se a atualização falhar.
-
-> Não execute o comando dentro de `su -` ou de um terminal já aberto como root. O próprio script solicita a autenticação necessária e retorna ao usuário comum.
-
-Caso `wget` não esteja disponível, use:
+Caso `wget` não esteja disponível:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
 ```
+
+O instalador escolhe a autenticação nesta ordem:
+
+1. usa `sudo` quando o usuário realmente possui autorização;
+2. usa a janela gráfica do **PolicyKit**, permitindo informar ou escolher uma conta administrativa;
+3. usa `su` somente como última alternativa, quando existe uma senha root habilitada;
+4. mostra uma mensagem clara quando nenhuma credencial administrativa válida está disponível.
+
+> A senha pedida pelo `su` é a senha do **root**, e pode ser diferente da senha do usuário comum. Em instalações Mint com root bloqueado, autorize pela janela gráfica do PolicyKit ou peça a um administrador da máquina.
+
+Além da autenticação, o script:
+
+- identifica o usuário comum e sua pasta pessoal;
+- baixa ou atualiza o projeto;
+- escolhe instalação normal na primeira execução e modo rápido nas atualizações;
+- verifica os pacotes já instalados e baixa apenas o que estiver ausente;
+- configura CUPS, Avahi e Samba;
+- adiciona o usuário aos grupos `lp`, `lpadmin` e `sambashare`, quando existirem;
+- instala atalhos globais e no menu;
+- valida dependências, testes e abertura da interface;
+- preserva a versão anterior se a atualização falhar.
 
 ## Atualização rápida
 
@@ -50,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main
 wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --fast
 ```
 
-O modo rápido não executa APT quando o ambiente existente está íntegro. Ele reutiliza PySide6 e as demais dependências, reinstala somente o Neri Printer Manager, executa os testes e mantém rollback.
+O modo rápido não executa APT quando o ambiente existente está íntegro. Ele reutiliza PySide6 e as demais dependências, reinstala somente o programa, executa os testes e mantém rollback.
 
 ## Reparo completo
 
@@ -76,12 +80,12 @@ neri-printer-cli --help
 /opt/neri-printer-manager/venv/bin/python -m pip check
 ```
 
-Se o usuário acabou de ser adicionado ao grupo `lpadmin`, encerre e abra a sessão do Mint uma vez para aplicar a nova associação de grupo.
+Se o usuário acabou de ser adicionado ao grupo `lpadmin`, encerre e abra a sessão do Mint uma vez para aplicar a nova associação.
 
 Log da instalação:
 
 ```bash
-su -c "tail -n 200 /var/log/neri-printer-manager-install.log"
+pkexec tail -n 200 /var/log/neri-printer-manager-install.log
 ```
 
 ## Impressora compartilhada por Windows ou outro computador
@@ -108,4 +112,4 @@ A interface roda como usuário comum. Ações administrativas usam PolicyKit. No
 
 ## Estado de homologação
 
-A versão 1.4.1 introduz o instalador universal com detecção de `sudo`/`su`, dependências incrementais, configuração de serviços, grupos e atalhos por usuário. A confirmação final de impressão ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.
+A versão 1.4.2 melhora a autenticação do instalador: tenta `sudo`, depois PolicyKit gráfico e deixa `su` apenas como último recurso. A confirmação final de impressão ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.

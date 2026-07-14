@@ -11,6 +11,7 @@ DESKTOP="/usr/share/applications/neri-printer-manager.desktop"
 LOG="/var/log/${APP}-install.log"
 MODE="normal"
 ACTIVE_ROOT=""
+TARGET_USER="${NERI_TARGET_USER:-${SUDO_USER:-}}"
 
 usage() {
   cat <<'EOF'
@@ -21,9 +22,8 @@ Opções:
   --repair    Reinstala todas as dependências APT e recria o aplicativo.
   --help      Mostra esta ajuda.
 
-Execute como root, usando sudo ou su. O programa deve ser aberto depois como usuário comum.
-Sem opção, o instalador verifica e instala somente os pacotes ausentes e cria
-um ambiente novo antes de ativar a atualização.
+Execute como root. Prefira bootstrap.sh, que escolhe sudo ou su automaticamente,
+identifica o usuário real e abre o programa como usuário comum.
 EOF
 }
 
@@ -32,26 +32,29 @@ while (($# > 0)); do
     --fast) MODE="fast" ;;
     --repair) MODE="repair" ;;
     --help|-h) usage; exit 0 ;;
-    *)
-      echo "Opção inválida: $1" >&2
-      usage >&2
-      exit 2
-      ;;
+    *) echo "Opção inválida: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
 
-[[ ${EUID} -eq 0 ]] || {
-  echo "Este instalador precisa de privilégios administrativos." >&2
-  echo "Use: sudo bash ./install.sh  ou  su -c \"cd '$PWD' && bash ./install.sh\"" >&2
-  exit 1
-}
+[[ ${EUID} -eq 0 ]] || { echo "Este instalador precisa ser executado como root." >&2; exit 1; }
 command -v apt-get >/dev/null 2>&1 || { echo "Distribuição não suportada: apt-get não encontrado." >&2; exit 1; }
 [[ -f pyproject.toml ]] || { echo "Execute o instalador dentro da pasta do projeto." >&2; exit 1; }
+
+if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+  TARGET_USER="$(logname 2>/dev/null || true)"
+fi
+if [[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]]; then
+  TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+else
+  TARGET_USER=""
+  TARGET_HOME=""
+fi
 
 exec > >(tee -a "$LOG") 2>&1
 echo "== Neri Printer Manager: instalação (${MODE}) =="
 date -Is
+echo "Usuário de destino: ${TARGET_USER:-não identificado}"
 
 export DEBIAN_FRONTEND=noninteractive
 PACKAGES=(
@@ -66,10 +69,7 @@ PACKAGES=(
 
 if [[ "$MODE" == "fast" ]]; then
   echo "Modo rápido: pacotes APT não serão consultados nem reinstalados."
-  command -v python3 >/dev/null 2>&1 || {
-    echo "Python 3 ausente. Execute a instalação normal." >&2
-    exit 1
-  }
+  command -v python3 >/dev/null 2>&1 || { echo "Python 3 ausente. Execute a instalação normal." >&2; exit 1; }
 elif [[ "$MODE" == "repair" ]]; then
   echo "Modo reparo: reinstalando dependências do sistema."
   apt-get update
@@ -80,7 +80,7 @@ else
     dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q '^install ok installed$' || MISSING+=("$package")
   done
   if ((${#MISSING[@]} > 0)); then
-    echo "Instalando dependências ausentes: ${MISSING[*]}"
+    echo "Instalando somente dependências ausentes: ${MISSING[*]}"
     apt-get update
     apt-get install -y --no-install-recommends "${MISSING[@]}"
   else
@@ -113,9 +113,7 @@ if [[ "$MODE" == "fast" ]] && healthy_existing_environment; then
   ACTIVE_ROOT="$PREFIX"
   "$PREFIX/venv/bin/python" -m pip install --disable-pip-version-check --no-deps --force-reinstall .
 else
-  if [[ "$MODE" == "fast" ]]; then
-    echo "Ambiente existente ausente ou inconsistente; criando ambiente novo com segurança."
-  fi
+  [[ "$MODE" == "fast" ]] && echo "Ambiente ausente ou inconsistente; recriando com segurança."
   python3 -m venv "$STAGING/venv"
   "$STAGING/venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel
   "$STAGING/venv/bin/python" -m pip install --disable-pip-version-check '.[dev]'
@@ -126,12 +124,11 @@ fi
 "$ACTIVE_ROOT/venv/bin/python" -m compileall -q src/neri_printer_manager
 
 echo "Executando testes automatizados..."
-QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
-  "$ACTIVE_ROOT/venv/bin/python" -m pytest -q || {
-    if [[ "$ACTIVE_ROOT" == "$PREFIX" ]]; then rollback; fi
-    echo "Os testes falharam. A versão anterior foi preservada." >&2
-    exit 1
-  }
+QT_QPA_PLATFORM=offscreen PYTHONPATH=src "$ACTIVE_ROOT/venv/bin/python" -m pytest -q || {
+  [[ "$ACTIVE_ROOT" == "$PREFIX" ]] && rollback
+  echo "Os testes falharam. A versão anterior foi preservada." >&2
+  exit 1
+}
 
 QT_QPA_PLATFORM=offscreen "$ACTIVE_ROOT/venv/bin/python" - <<'PY'
 from PySide6.QtWidgets import QApplication
@@ -144,7 +141,7 @@ print("Teste gráfico e importações: OK")
 PY
 
 if [[ "$ACTIVE_ROOT" == "$STAGING" ]]; then
-  if [[ -d "$PREFIX" ]]; then mv "$PREFIX" "$BACKUP"; fi
+  [[ -d "$PREFIX" ]] && mv "$PREFIX" "$BACKUP"
   if ! mv "$STAGING" "$PREFIX"; then rollback; exit 1; fi
 fi
 trap - EXIT
@@ -156,9 +153,6 @@ if ! install -D -m 0755 packaging/libexec/neri-printer-helper "$HELPER" || \
   exit 1
 fi
 
-# Não chama os scripts gerados pelo pip diretamente. Quando um venv temporário é
-# movido para /opt, esses scripts podem manter o caminho antigo no shebang.
-# Os launchers abaixo usam o Python definitivo e funcionam após sudo ou su.
 cat > /usr/local/bin/neri-printer-manager <<EOF
 #!/usr/bin/env bash
 exec "$PREFIX/venv/bin/python" -m neri_printer_manager.safe_app "\$@"
@@ -168,10 +162,23 @@ cat > /usr/local/bin/neri-printer-cli <<EOF
 exec "$PREFIX/venv/bin/python" -m neri_printer_manager.cli "\$@"
 EOF
 chmod 0755 /usr/local/bin/neri-printer-manager /usr/local/bin/neri-printer-cli
+chmod -R a+rX "$PREFIX"
 
 systemctl enable --now cups.service avahi-daemon.service
 systemctl enable --now smbd.service 2>/dev/null || true
+systemctl restart cups.service
 update-desktop-database >/dev/null 2>&1 || true
+
+# Libera o usuário detectado para administrar filas locais sem executar a interface como root.
+if [[ -n "$TARGET_USER" ]]; then
+  for group in lp lpadmin sambashare; do
+    getent group "$group" >/dev/null 2>&1 && usermod -aG "$group" "$TARGET_USER" || true
+  done
+  if [[ -n "$TARGET_HOME" && -d "$TARGET_HOME" ]]; then
+    install -d -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" "$TARGET_HOME/.local/share/applications"
+    install -m 0644 -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" "$DESKTOP" "$TARGET_HOME/.local/share/applications/neri-printer-manager.desktop"
+  fi
+fi
 
 "$PREFIX/venv/bin/python" -m pip check
 /usr/local/bin/neri-printer-cli --help >/dev/null
@@ -182,4 +189,8 @@ VERSION=$("$PREFIX/venv/bin/python" -m pip show neri-printer-manager | awk '/^Ve
 echo "Instalação concluída. Versão: ${VERSION:-desconhecida}"
 echo "Modo utilizado: $MODE"
 echo "Log: $LOG"
-echo "Saia do root e execute como usuário comum: neri-printer-manager"
+if [[ -n "$TARGET_USER" ]]; then
+  echo "Usuário preparado: $TARGET_USER"
+  echo "Abra como usuário comum: neri-printer-manager"
+  echo "Se o usuário acabou de entrar no grupo lpadmin, encerre e abra a sessão uma vez."
+fi

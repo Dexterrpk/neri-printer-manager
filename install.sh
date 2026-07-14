@@ -10,17 +10,19 @@ POLICY="/usr/share/polkit-1/actions/com.neriinfotech.printermanager.policy"
 DESKTOP="/usr/share/applications/neri-printer-manager.desktop"
 LOG="/var/log/${APP}-install.log"
 MODE="normal"
+ACTIVE_ROOT=""
 
 usage() {
   cat <<'EOF'
 Uso: sudo bash ./install.sh [opção]
 
 Opções:
-  --fast      Não consulta nem instala pacotes APT; atualiza somente o aplicativo.
+  --fast      Reutiliza o ambiente Python íntegro e atualiza somente o aplicativo.
   --repair    Reinstala todas as dependências APT e recria o aplicativo.
   --help      Mostra esta ajuda.
 
-Sem opção, o instalador verifica e instala somente os pacotes ausentes.
+Sem opção, o instalador verifica e instala somente os pacotes ausentes e cria
+um ambiente novo antes de ativar a atualização.
 EOF
 }
 
@@ -43,26 +45,26 @@ command -v apt-get >/dev/null 2>&1 || { echo "Distribuição não suportada: apt
 [[ -f pyproject.toml ]] || { echo "Execute o instalador dentro da pasta do projeto." >&2; exit 1; }
 
 exec > >(tee -a "$LOG") 2>&1
-echo "== Neri Printer Manager: instalação transacional (${MODE}) =="
+echo "== Neri Printer Manager: instalação (${MODE}) =="
 date -Is
 
 export DEBIAN_FRONTEND=noninteractive
 PACKAGES=(
- python3 python3-venv python3-pip git ca-certificates
- cups cups-client cups-bsd cups-browsed cups-filters ghostscript
- avahi-daemon avahi-utils libnss-mdns policykit-1
- samba smbclient samba-common-bin
- hplip printer-driver-hpcups printer-driver-gutenprint foomatic-db-compressed-ppds
- libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0 libxcb-icccm4 libxcb-image0
- libxcb-keysyms1 libxcb-render-util0 libegl1 libgl1
+  python3 python3-venv python3-pip git ca-certificates
+  cups cups-client cups-bsd cups-browsed cups-filters ghostscript
+  avahi-daemon avahi-utils libnss-mdns policykit-1
+  samba smbclient samba-common-bin
+  hplip printer-driver-hpcups printer-driver-gutenprint foomatic-db-compressed-ppds
+  libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0 libxcb-icccm4 libxcb-image0
+  libxcb-keysyms1 libxcb-render-util0 libegl1 libgl1
 )
 
 if [[ "$MODE" == "fast" ]]; then
-  echo "Modo rápido: verificação e instalação de pacotes APT ignoradas."
+  echo "Modo rápido: pacotes APT não serão consultados nem reinstalados."
   for command in python3 git; do
     command -v "$command" >/dev/null 2>&1 || {
-      echo "Comando obrigatório ausente no modo rápido: $command" >&2
-      echo "Execute a instalação normal: sudo bash ./install.sh" >&2
+      echo "Comando obrigatório ausente: $command" >&2
+      echo "Execute: sudo bash ./install.sh" >&2
       exit 1
     }
   done
@@ -86,35 +88,52 @@ fi
 
 cleanup() { rm -rf "$STAGING"; }
 rollback() {
-  echo "Falha durante a ativação. Restaurando versão anterior..." >&2
+  echo "Falha na atualização. Restaurando versão anterior..." >&2
   rm -rf "$PREFIX"
   [[ -d "$BACKUP" ]] && mv "$BACKUP" "$PREFIX"
 }
 trap cleanup EXIT
 rm -rf "$STAGING" "$BACKUP"
-python3 -m venv "$STAGING/venv"
-"$STAGING/venv/bin/python" -m pip install --upgrade pip setuptools wheel
-"$STAGING/venv/bin/python" -m pip install '.[dev]'
 
-"$STAGING/venv/bin/python" -m pip check
-# Compila somente o código do projeto. Não compila site-packages, pois o PySide6
-# inclui arquivos de template *.tmpl.py que não são módulos Python válidos.
-"$STAGING/venv/bin/python" -m compileall -q src/neri_printer_manager
+healthy_existing_environment() {
+  [[ -x "$PREFIX/venv/bin/python" ]] || return 1
+  "$PREFIX/venv/bin/python" -m pip check >/dev/null 2>&1 || return 1
+  "$PREFIX/venv/bin/python" - <<'PY' >/dev/null 2>&1
+import PySide6
+import pytest
+import neri_printer_manager
+PY
+}
 
-echo "Executando testes automatizados no ambiente de instalação..."
+if [[ "$MODE" == "fast" ]] && healthy_existing_environment; then
+  echo "Ambiente Python existente íntegro; reutilizando dependências e cache."
+  cp -a "$PREFIX" "$BACKUP"
+  ACTIVE_ROOT="$PREFIX"
+  "$PREFIX/venv/bin/python" -m pip install --disable-pip-version-check --no-deps --force-reinstall .
+else
+  if [[ "$MODE" == "fast" ]]; then
+    echo "Ambiente existente ausente ou inconsistente; criando ambiente novo com segurança."
+  fi
+  python3 -m venv "$STAGING/venv"
+  "$STAGING/venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel
+  "$STAGING/venv/bin/python" -m pip install --disable-pip-version-check '.[dev]'
+  ACTIVE_ROOT="$STAGING"
+fi
+
+"$ACTIVE_ROOT/venv/bin/python" -m pip check
+"$ACTIVE_ROOT/venv/bin/python" -m compileall -q src/neri_printer_manager
+
+echo "Executando testes automatizados..."
 QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
- "$STAGING/venv/bin/python" -m pytest -q || {
-   echo "Os testes falharam. A versão atualmente instalada foi preservada." >&2
-   exit 1
- }
+  "$ACTIVE_ROOT/venv/bin/python" -m pytest -q || {
+    if [[ "$ACTIVE_ROOT" == "$PREFIX" ]]; then rollback; fi
+    echo "Os testes falharam. A versão anterior foi preservada." >&2
+    exit 1
+  }
 
-QT_QPA_PLATFORM=offscreen "$STAGING/venv/bin/python" - <<'PY'
+QT_QPA_PLATFORM=offscreen "$ACTIVE_ROOT/venv/bin/python" - <<'PY'
 from PySide6.QtWidgets import QApplication
-from neri_printer_manager.core import CupsService, DiagnosticService, JobService
-from neri_printer_manager.device_discovery import RichDiscoveryService
-from neri_printer_manager.host_locator import HostPrinterLocator
 from neri_printer_manager.safe_app import SafeEnhancedWindow
-from neri_printer_manager.usb import UsbPrinterService
 app = QApplication.instance() or QApplication([])
 window = SafeEnhancedWindow(auto_refresh=False)
 assert window.pages.count() >= 7
@@ -122,8 +141,10 @@ window.close()
 print("Teste gráfico e importações: OK")
 PY
 
-if [[ -d "$PREFIX" ]]; then mv "$PREFIX" "$BACKUP"; fi
-if ! mv "$STAGING" "$PREFIX"; then rollback; exit 1; fi
+if [[ "$ACTIVE_ROOT" == "$STAGING" ]]; then
+  if [[ -d "$PREFIX" ]]; then mv "$PREFIX" "$BACKUP"; fi
+  if ! mv "$STAGING" "$PREFIX"; then rollback; exit 1; fi
+fi
 trap - EXIT
 
 if ! install -D -m 0755 packaging/libexec/neri-printer-helper "$HELPER" || \
@@ -149,4 +170,4 @@ VERSION=$("$PREFIX/venv/bin/python" -m pip show neri-printer-manager | awk '/^Ve
 echo "Instalação concluída. Versão: ${VERSION:-desconhecida}"
 echo "Modo utilizado: $MODE"
 echo "Log: $LOG"
-echo "Execute: neri-printer-manager"
+echo "Execute como usuário comum: neri-printer-manager"

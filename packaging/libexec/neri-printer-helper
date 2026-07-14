@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 QUEUE_RE=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$")
 ALLOWED_SCHEMES={"ipp","ipps","http","https","socket","lpd","smb","usb"}
 ALLOWED_PACKAGES={"cups","cups-client","cups-browsed","cups-filters","ghostscript","avahi-daemon","avahi-utils","policykit-1","samba","smbclient","samba-common-bin","printer-driver-gutenprint","printer-driver-hpcups","foomatic-db-compressed-ppds","hplip","python3-pytest"}
+ALLOWED_SERVICES={"cups.service","avahi-daemon.service","smbd.service"}
 CUPS_EXEC_DIRS=(Path('/usr/lib/cups/filter'),Path('/usr/lib/cups/backend'))
 def fail(m,c=2): print(m,file=sys.stderr); return c
 def queue(v):
@@ -31,6 +32,11 @@ def fix_cups_permissions():
             for e in d.iterdir():
                 if e.is_file() and not e.is_symlink(): e.chmod((e.stat().st_mode & 0o7777)|0o111)
     return 0
+def enable_service(name):
+    if name not in ALLOWED_SERVICES: raise ValueError('serviço não autorizado')
+    return execute(['/usr/bin/systemctl','enable','--now',name])
+def clear_jobs():
+    return execute(['/usr/bin/cancel','-a'])
 def enable_printer_sharing(name):
     name=queue(name)
     for c in (["/usr/sbin/lpadmin","-p",name,"-o","printer-is-shared=true"],["/usr/sbin/cupsctl","--share-printers","--remote-any"],["/usr/bin/systemctl","enable","--now","cups.service"]):
@@ -57,7 +63,9 @@ def main(argv):
         if a=='install-packages' and x:return install_packages(x)
         if a=='reinstall-packages' and x:return install_packages(x,True)
         if a=='restart-cups' and not x:return execute(['/usr/bin/systemctl','restart','cups.service'])
-        if a=='enable-cups' and not x:return execute(['/usr/bin/systemctl','enable','--now','cups.service'])
+        if a=='enable-cups' and not x:return enable_service('cups.service')
+        if a=='enable-service' and len(x)==1:return enable_service(x[0])
+        if a=='clear-jobs' and not x:return clear_jobs()
         if a=='fix-cups-permissions' and not x:return fix_cups_permissions()
         if a=='enable-printer-sharing' and len(x)==1:return enable_printer_sharing(x[0])
     except (OSError,ValueError) as e:return fail(str(e))

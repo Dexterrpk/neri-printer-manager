@@ -36,7 +36,11 @@ _SIGNATURES: tuple[tuple[re.Pattern[str], str, str, tuple[RepairAction, ...]], .
         re.compile(r"filter failed|stopped with status [^0]", re.IGNORECASE),
         "filter_failed",
         "Filtro falhou em trabalho recente",
-        (RepairAction.REINSTALL_FILTERS, RepairAction.RESTART_CUPS),
+        (
+            RepairAction.REINSTALL_FILTERS,
+            RepairAction.REINSTALL_GHOSTSCRIPT,
+            RepairAction.RESTART_CUPS,
+        ),
     ),
     (
         re.compile(r"unable to open ppd|ppd.*(missing|not found|bad value)", re.IGNORECASE),

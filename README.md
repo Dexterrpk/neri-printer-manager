@@ -2,7 +2,7 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.4.2
+## Versão atual: 1.4.3
 
 ### Principais recursos
 
@@ -31,8 +31,10 @@ O instalador escolhe a autenticação nesta ordem:
 
 1. usa `sudo` quando o usuário realmente possui autorização;
 2. usa a janela gráfica do **PolicyKit**, permitindo informar ou escolher uma conta administrativa;
-3. usa `su` somente como última alternativa, quando existe uma senha root habilitada;
-4. mostra uma mensagem clara quando nenhuma credencial administrativa válida está disponível.
+3. usa `su` somente quando não houver agente PolicyKit disponível;
+4. encerra com uma mensagem clara quando nenhuma credencial administrativa válida estiver disponível.
+
+Na versão 1.4.3, o script não faz mais uma autenticação de teste separada. A senha é solicitada na **primeira operação administrativa real**. Depois disso, `sudo` ou PolicyKit podem manter a autorização em cache por alguns minutos; nesse caso, as etapas seguintes não pedem a senha novamente. Isso é comportamento normal do Linux e não significa que a instalação esteja sem autenticação.
 
 > A senha pedida pelo `su` é a senha do **root**, e pode ser diferente da senha do usuário comum. Em instalações Mint com root bloqueado, autorize pela janela gráfica do PolicyKit ou peça a um administrador da máquina.
 
@@ -112,4 +114,4 @@ A interface roda como usuário comum. Ações administrativas usam PolicyKit. No
 
 ## Estado de homologação
 
-A versão 1.4.2 melhora a autenticação do instalador: tenta `sudo`, depois PolicyKit gráfico e deixa `su` apenas como último recurso. A confirmação final de impressão ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.
+A versão 1.4.3 solicita autenticação apenas na primeira ação administrativa real e usa caminhos absolutos para `apt-get`, `env` e `bash`. A confirmação final de impressão ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.

@@ -2,7 +2,7 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.3.5
+## Versão atual: 1.3.6
 
 ### Principais recursos
 
@@ -18,11 +18,47 @@ Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar im
 
 ## Primeira instalação no Linux Mint
 
+Em um usuário que possui `sudo`:
+
 ```bash
-sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --normal
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+cd ~
+git clone https://github.com/Dexterrpk/neri-printer-manager.git
+cd neri-printer-manager
+sudo bash ./install.sh
+neri-printer-manager
 ```
 
 A instalação normal verifica os pacotes do sistema e baixa somente os que estiverem ausentes.
+
+## Instalação usando `su`
+
+Use este método quando o usuário logado não pertence ao grupo de administradores, mas você possui a senha do root.
+
+No terminal do usuário comum:
+
+```bash
+cd ~/neri-printer-manager
+git restore install.sh 2>/dev/null || true
+git pull --ff-only
+PROJECT_DIR="$PWD"
+su -c "cd '$PROJECT_DIR' && bash ./install.sh --fast"
+neri-printer-manager
+```
+
+O comando `su -c` pede a senha do root, instala o programa e retorna automaticamente ao usuário comum. Não abra a interface gráfica como root.
+
+Na primeira instalação, caso o repositório ainda não exista:
+
+```bash
+cd ~
+git clone https://github.com/Dexterrpk/neri-printer-manager.git
+cd neri-printer-manager
+PROJECT_DIR="$PWD"
+su -c "cd '$PROJECT_DIR' && bash ./install.sh"
+neri-printer-manager
+```
 
 ## Atualização mais rápida
 
@@ -35,6 +71,16 @@ git pull --ff-only
 sudo bash ./install.sh --fast
 ```
 
+Ou, quando o usuário não possui `sudo`:
+
+```bash
+cd ~/neri-printer-manager
+git restore install.sh 2>/dev/null || true
+git pull --ff-only
+PROJECT_DIR="$PWD"
+su -c "cd '$PROJECT_DIR' && bash ./install.sh --fast"
+```
+
 O modo `--fast`:
 
 - não executa `apt update`;
@@ -45,16 +91,9 @@ O modo `--fast`:
 - mantém uma cópia para rollback durante a atualização;
 - cria um ambiente novo automaticamente se detectar corrupção ou dependência ausente.
 
-## Instalação normal pelo repositório
-
-```bash
-cd ~/neri-printer-manager
-git restore install.sh 2>/dev/null || true
-git pull --ff-only
-sudo bash ./install.sh
-```
-
 ## Reparo completo
+
+Com `sudo`:
 
 ```bash
 cd ~/neri-printer-manager
@@ -62,7 +101,27 @@ git pull --ff-only
 sudo bash ./install.sh --repair
 ```
 
+Com `su`:
+
+```bash
+cd ~/neri-printer-manager
+git pull --ff-only
+PROJECT_DIR="$PWD"
+su -c "cd '$PROJECT_DIR' && bash ./install.sh --repair"
+```
+
 O modo `--repair` reinstala as dependências do sistema e recria o ambiente do aplicativo.
+
+## Correção dos atalhos na versão 1.3.6
+
+Os atalhos globais agora executam diretamente:
+
+```text
+/opt/neri-printer-manager/venv/bin/python -m neri_printer_manager.safe_app
+/opt/neri-printer-manager/venv/bin/python -m neri_printer_manager.cli
+```
+
+Isso evita o erro `arquivo requerido não encontrado` que podia ocorrer quando o ambiente virtual temporário era movido para `/opt` e os scripts gerados pelo `pip` mantinham o caminho antigo no cabeçalho.
 
 ## Comandos depois da instalação
 
@@ -83,7 +142,7 @@ neri-printer-cli --help
 Log da instalação:
 
 ```bash
-sudo tail -n 200 /var/log/neri-printer-manager-install.log
+su -c "tail -n 200 /var/log/neri-printer-manager-install.log"
 ```
 
 ## Instalar impressora USB
@@ -121,4 +180,4 @@ A interface roda como usuário comum. O helper administrativo aceita somente uma
 
 ## Estado de homologação
 
-A versão 1.3.5 possui instalação transacional, atualização rápida com reutilização segura do ambiente, testes automatizados e rollback. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes.
+A versão 1.3.6 possui instalação transacional, atualização rápida com reutilização segura do ambiente, testes automatizados, rollback e launchers independentes dos caminhos gerados pelo `pip`. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes.

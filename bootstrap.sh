@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 REPO_URL="https://github.com/Dexterrpk/neri-printer-manager.git"
 MODE="${1:---auto}"
+ROOT_METHOD=""
 
 case "$MODE" in
   --auto|--fast|--normal|--repair) ;;
@@ -19,8 +20,7 @@ EOF
   *) echo "Opção inválida: $MODE" >&2; exit 2 ;;
 esac
 
-# O script deve ser iniciado pelo usuário que utilizará o programa. Mesmo sem sudo,
-# ele usa su automaticamente e volta ao usuário comum ao terminar.
+# O bootstrap deve ser iniciado na sessão do usuário que utilizará o programa.
 if [[ ${EUID} -eq 0 ]]; then
   TARGET_USER="${NERI_TARGET_USER:-${SUDO_USER:-$(logname 2>/dev/null || true)}}"
   [[ -n "$TARGET_USER" && "$TARGET_USER" != "root" ]] || {
@@ -30,8 +30,12 @@ if [[ ${EUID} -eq 0 ]]; then
 else
   TARGET_USER="$(id -un)"
 fi
+
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-[[ -n "$TARGET_HOME" ]] || { echo "Não foi possível localizar a pasta do usuário $TARGET_USER." >&2; exit 1; }
+[[ -n "$TARGET_HOME" ]] || {
+  echo "Não foi possível localizar a pasta do usuário $TARGET_USER." >&2
+  exit 1
+}
 PROJECT_DIR="${NERI_PROJECT_DIR:-$TARGET_HOME/neri-printer-manager}"
 
 quote_command() {
@@ -40,23 +44,71 @@ quote_command() {
   printf '%s' "${out# }"
 }
 
-run_root() {
+user_is_admin_group() {
+  id -nG "$TARGET_USER" 2>/dev/null | tr ' ' '\n' | grep -Eq '^(sudo|admin|wheel)$'
+}
+
+choose_root_method() {
+  [[ -n "$ROOT_METHOD" ]] && return 0
+
   if [[ ${EUID} -eq 0 ]]; then
-    "$@"
-    return
+    ROOT_METHOD="root"
+    return 0
   fi
 
-  # Usa sudo para usuários autorizados. Caso contrário, pede diretamente a senha root via su.
-  if command -v sudo >/dev/null 2>&1 && id -nG "$TARGET_USER" | tr ' ' '\n' | grep -Eq '^(sudo|admin|wheel)$'; then
-    sudo "$@"
-  elif command -v su >/dev/null 2>&1; then
-    local command
-    command="$(quote_command "$@")"
-    su -c "$command"
-  else
-    echo "Não foi encontrado sudo nem su para obter privilégios administrativos." >&2
-    exit 1
+  # Evita pedir a senha do próprio usuário quando ele claramente não é administrador.
+  if command -v sudo >/dev/null 2>&1 && user_is_admin_group; then
+    echo "== Autenticação administrativa pelo sudo =="
+    if sudo -v; then
+      ROOT_METHOD="sudo"
+      return 0
+    fi
+    echo "O sudo não autorizou este usuário; tentando autenticação gráfica." >&2
   fi
+
+  # No desktop Mint, o PolicyKit permite escolher/informar uma conta administrativa.
+  if command -v pkexec >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    echo "== Solicitando uma conta administrativa pelo PolicyKit =="
+    if pkexec /usr/bin/true; then
+      ROOT_METHOD="pkexec"
+      return 0
+    fi
+    echo "A autenticação gráfica foi cancelada ou recusada." >&2
+  fi
+
+  # Último recurso para instalações com uma senha root realmente habilitada.
+  if command -v su >/dev/null 2>&1; then
+    echo "== Última alternativa: autenticação com a senha do root =="
+    echo "Atenção: esta é a senha do root, não necessariamente a senha do usuário $TARGET_USER."
+    if su -c /usr/bin/true; then
+      ROOT_METHOD="su"
+      return 0
+    fi
+  fi
+
+  cat >&2 <<EOF
+Não foi possível obter privilégios administrativos.
+
+Peça a um administrador da máquina para executar este comando na sessão de $TARGET_USER,
+ou autorizar a janela gráfica do PolicyKit quando ela aparecer.
+O instalador não consegue criar permissões administrativas sem uma credencial válida.
+EOF
+  exit 1
+}
+
+run_root() {
+  choose_root_method
+  case "$ROOT_METHOD" in
+    root) "$@" ;;
+    sudo) sudo "$@" ;;
+    pkexec) pkexec "$@" ;;
+    su)
+      local command
+      command="$(quote_command "$@")"
+      su -c "$command"
+      ;;
+    *) echo "Método administrativo inválido." >&2; exit 1 ;;
+  esac
 }
 
 ensure_download_tools() {
@@ -107,7 +159,7 @@ echo
 echo "Instalação concluída para $TARGET_USER."
 echo "Abra pelo menu ou execute: neri-printer-manager"
 
-# Só abre automaticamente quando ainda estamos na sessão gráfica do usuário comum.
+# Só abre automaticamente dentro da sessão gráfica do usuário comum.
 if [[ ${EUID} -ne 0 && -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   nohup neri-printer-manager >/tmp/neri-printer-manager-start.log 2>&1 &
 fi

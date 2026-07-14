@@ -2,23 +2,24 @@
 
 Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
 
-## Versão atual: 1.3.6
+## Versão atual: 1.4.0
 
 ### Principais recursos
 
 - Busca por IP, hostname, DNS, mDNS e NetBIOS.
 - Impressoras IPP/IPPS, JetDirect, LPD e compartilhamentos SMB autenticados.
 - Descoberta com nome da impressora, modelo, hostname, IP, protocolo e fila local separados.
-- Resolução de hostname com timeout seguro: falhas de DNS/NetBIOS não interrompem a listagem.
-- Instalação de impressora USB com comparação automática dos drivers disponíveis no CUPS.
-- Preferência por drivers do fabricante, HPLIP/HPCUPS, Gutenprint e Foomatic; fallback PCL/PostScript.
-- Compartilhamento da fila selecionada pelo CUPS e preparação do Samba.
-- Filas CUPS: listar, instalar, remover, pausar, retomar e imprimir página de teste.
-- Diagnóstico orientado de CUPS, filtros, PPDs, backends, permissões e dependências.
+- Instalação inteligente com busca em `lpinfo -m` por PPD/driver do fabricante.
+- Prioridade para HPLIP/HPCUPS, Gutenprint e Foomatic compatíveis.
+- Uso de PCL/PostScript genérico somente como último recurso.
+- Credenciais SMB aplicadas na URI de instalação com codificação segura.
+- Ativação da fila e envio automático de página de teste após instalar.
+- Remoção automática da fila quando a tentativa falha.
+- Instalação USB, compartilhamento, diagnóstico, filtros, filas e relatórios.
 
 ## Primeira instalação no Linux Mint
 
-Em um usuário que possui `sudo`:
+Em um usuário com `sudo`:
 
 ```bash
 sudo apt-get update
@@ -30,13 +31,9 @@ sudo bash ./install.sh
 neri-printer-manager
 ```
 
-A instalação normal verifica os pacotes do sistema e baixa somente os que estiverem ausentes.
-
 ## Instalação usando `su`
 
-Use este método quando o usuário logado não pertence ao grupo de administradores, mas você possui a senha do root.
-
-No terminal do usuário comum:
+Use quando o usuário logado não pertence ao grupo de administradores, mas você possui a senha do root:
 
 ```bash
 cd ~/neri-printer-manager
@@ -47,22 +44,11 @@ su -c "cd '$PROJECT_DIR' && bash ./install.sh --fast"
 neri-printer-manager
 ```
 
-O comando `su -c` pede a senha do root, instala o programa e retorna automaticamente ao usuário comum. Não abra a interface gráfica como root.
-
-Na primeira instalação, caso o repositório ainda não exista:
-
-```bash
-cd ~
-git clone https://github.com/Dexterrpk/neri-printer-manager.git
-cd neri-printer-manager
-PROJECT_DIR="$PWD"
-su -c "cd '$PROJECT_DIR' && bash ./install.sh"
-neri-printer-manager
-```
+O `su -c` instala como root e retorna ao usuário comum. Não abra a interface gráfica como root.
 
 ## Atualização mais rápida
 
-Use depois que o programa já estiver instalado:
+Com `sudo`:
 
 ```bash
 cd ~/neri-printer-manager
@@ -71,7 +57,7 @@ git pull --ff-only
 sudo bash ./install.sh --fast
 ```
 
-Ou, quando o usuário não possui `sudo`:
+Sem `sudo`, usando a senha do root:
 
 ```bash
 cd ~/neri-printer-manager
@@ -81,15 +67,7 @@ PROJECT_DIR="$PWD"
 su -c "cd '$PROJECT_DIR' && bash ./install.sh --fast"
 ```
 
-O modo `--fast`:
-
-- não executa `apt update`;
-- não consulta nem reinstala pacotes APT;
-- reutiliza o PySide6 e as demais dependências Python já instaladas quando o ambiente está íntegro;
-- reinstala somente o pacote do Neri Printer Manager;
-- executa testes e teste gráfico antes de concluir;
-- mantém uma cópia para rollback durante a atualização;
-- cria um ambiente novo automaticamente se detectar corrupção ou dependência ausente.
+O modo `--fast` não executa APT, reutiliza o ambiente Python íntegro, reinstala somente o programa, executa testes e mantém rollback.
 
 ## Reparo completo
 
@@ -110,30 +88,40 @@ PROJECT_DIR="$PWD"
 su -c "cd '$PROJECT_DIR' && bash ./install.sh --repair"
 ```
 
-O modo `--repair` reinstala as dependências do sistema e recria o ambiente do aplicativo.
+## Instalar impressora compartilhada por Windows ou outro computador
 
-## Correção dos atalhos na versão 1.3.6
-
-Os atalhos globais agora executam diretamente:
+1. Abra **Encontrar na rede**.
+2. Digite o hostname ou IP do computador.
+3. Informe o usuário exatamente como o servidor espera, por exemplo:
 
 ```text
-/opt/neri-printer-manager/venv/bin/python -m neri_printer_manager.safe_app
-/opt/neri-printer-manager/venv/bin/python -m neri_printer_manager.cli
+same
+suporte
+DOMINIO\same
+COMPUTADOR\suporte
 ```
 
-Isso evita o erro `arquivo requerido não encontrado` que podia ocorrer quando o ambiente virtual temporário era movido para `/opt` e os scripts gerados pelo `pip` mantinham o caminho antigo no cabeçalho.
+4. Informe a senha e clique em **Buscar**.
+5. Selecione a impressora encontrada e clique em **Instalar selecionada**.
 
-## Comandos depois da instalação
+Na versão 1.4.0 o programa:
 
-Abra o programa como usuário comum:
+1. usa as credenciais informadas para descobrir a fila SMB;
+2. codifica usuário e senha corretamente na URI usada pelo backend SMB;
+3. pesquisa drivers instalados com `lpinfo -m`;
+4. tenta primeiro o PPD mais compatível com o nome/modelo da fila;
+5. usa HPLIP/HPCUPS, Gutenprint ou Foomatic quando houver correspondência;
+6. deixa drivers genéricos para o final;
+7. ativa e libera a fila no CUPS;
+8. envia uma página de teste automaticamente;
+9. remove a fila caso a tentativa falhe.
+
+> Não grave senhas no GitHub ou no README. As credenciais são informadas na interface e usadas durante a instalação.
+
+## Verificar a instalação
 
 ```bash
 neri-printer-manager
-```
-
-Verificação:
-
-```bash
 neri-printer-cli --help
 /opt/neri-printer-manager/venv/bin/python -m pip show neri-printer-manager | grep Version
 /opt/neri-printer-manager/venv/bin/python -m pip check
@@ -152,7 +140,7 @@ su -c "tail -n 200 /var/log/neri-printer-manager-install.log"
 3. Clique em **Procurar USB**.
 4. Confira fabricante, modelo e driver recomendado.
 5. Selecione a impressora e clique em **Instalar USB selecionada**.
-6. Abra **Minhas impressoras** e envie uma página de teste.
+6. Abra **Minhas impressoras** e confirme a página de teste.
 
 ## Compartilhar uma impressora USB ou local
 
@@ -160,10 +148,6 @@ su -c "tail -n 200 /var/log/neri-printer-manager-install.log"
 2. Abra **Compartilhamento**.
 3. Clique em **Compartilhar impressora selecionada**.
 4. Autorize a ação administrativa.
-
-## Impressora compartilhada por Windows ou outro computador
-
-Abra **Encontrar na rede**, informe hostname ou IP e, quando necessário, usuário e senha SMB. O programa tenta resolução DNS, mDNS e NetBIOS e lista as filas publicadas pelo computador informado.
 
 ## Desenvolvimento
 
@@ -176,8 +160,8 @@ QT_QPA_PLATFORM=offscreen python -m pytest -q
 
 ## Segurança
 
-A interface roda como usuário comum. O helper administrativo aceita somente uma lista fechada de operações. Nomes de filas, URIs e pacotes são validados e nenhum comando externo é executado com `shell=True`.
+A interface roda como usuário comum. Ações administrativas usam PolicyKit. Nomes de filas, URIs e pacotes são validados e nenhum comando externo é executado com `shell=True`.
 
 ## Estado de homologação
 
-A versão 1.3.6 possui instalação transacional, atualização rápida com reutilização segura do ambiente, testes automatizados, rollback e launchers independentes dos caminhos gerados pelo `pip`. A validação final de hardware e rede depende dos testes reais em Linux Mint, pois modelos de impressora, firmware, drivers, firewall e políticas SMB variam entre ambientes.
+A versão 1.4.0 melhora a instalação SMB autenticada e a seleção automática de PPD. A confirmação final ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.

@@ -53,8 +53,7 @@ class RepairService:
             return [RepairResult(check.code, RepairStatus.SKIPPED, "Esta linha é informativa e não exige alteração.")]
         try:
             if check.action is HealthAction.INSTALL_DEPENDENCIES:
-                result = self.install_missing_dependencies(include_optional=False)
-                results = [result]
+                results = [self.install_missing_dependencies(include_optional=False)]
             elif check.action is HealthAction.ENABLE_CUPS:
                 self._helper("enable-service", "cups.service")
                 results = [RepairResult("enable-cups", RepairStatus.SUCCESS, "CUPS ativado e iniciado.")]
@@ -89,7 +88,11 @@ class RepairService:
         results: list[RepairResult] = []
         seen: set[HealthAction] = set()
         for check in checks:
-            if not check.safe_automatic or check.action in {HealthAction.NONE, HealthAction.REPAIR_FILTER}:
+            if not check.safe_automatic or check.action is HealthAction.NONE:
+                continue
+            # Cada falha de filtro pode exigir um conjunto diferente de pacotes/ações.
+            if check.action is HealthAction.REPAIR_FILTER:
+                results.extend(self.repair_health_check(check))
                 continue
             if check.action in seen:
                 continue
@@ -99,7 +102,6 @@ class RepairService:
 
     def repair_filter_finding(self, finding: FilterFinding) -> list[RepairResult]:
         results: list[RepairResult] = []
-
         packages = CupsFilterService.packages_for(finding.actions)
         if packages:
             try:

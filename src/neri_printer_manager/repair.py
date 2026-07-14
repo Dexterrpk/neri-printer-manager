@@ -8,6 +8,7 @@ from pathlib import Path
 from .core import CommandRunner, PrinterManagerError
 from .cups_filters import CupsFilterService, FilterFinding, RepairAction
 from .dependencies import DependencyService
+from .health import HealthAction, HealthCheck, PrinterHealthService
 
 HELPER = Path("/usr/libexec/neri-printer-helper")
 
@@ -26,7 +27,7 @@ class RepairResult:
 
 
 class RepairService:
-    """Executa somente ações previstas no catálogo interno."""
+    """Executa somente ações previstas no catálogo interno e verifica o resultado."""
 
     def __init__(self, runner: CommandRunner | None = None) -> None:
         self.runner = runner or CommandRunner(timeout=900)
@@ -45,6 +46,56 @@ class RepairService:
         if remaining:
             return RepairResult("dependencies", RepairStatus.FAILED, f"Pacotes ainda ausentes: {', '.join(remaining)}")
         return RepairResult("dependencies", RepairStatus.SUCCESS, "Dependências instaladas")
+
+    def repair_health_check(self, check: HealthCheck) -> list[RepairResult]:
+        """Executa a ação vinculada à linha e repete o diagnóstico correspondente."""
+        if check.action is HealthAction.NONE:
+            return [RepairResult(check.code, RepairStatus.SKIPPED, "Esta linha é informativa e não exige alteração.")]
+        try:
+            if check.action is HealthAction.INSTALL_DEPENDENCIES:
+                result = self.install_missing_dependencies(include_optional=False)
+                results = [result]
+            elif check.action is HealthAction.ENABLE_CUPS:
+                self._helper("enable-service", "cups.service")
+                results = [RepairResult("enable-cups", RepairStatus.SUCCESS, "CUPS ativado e iniciado.")]
+            elif check.action is HealthAction.RESTART_CUPS:
+                self._helper("restart-cups")
+                results = [RepairResult("restart-cups", RepairStatus.SUCCESS, "CUPS reiniciado.")]
+            elif check.action is HealthAction.ENABLE_AVAHI:
+                self._helper("enable-service", "avahi-daemon.service")
+                results = [RepairResult("enable-avahi", RepairStatus.SUCCESS, "Avahi ativado e iniciado.")]
+            elif check.action is HealthAction.ENABLE_SAMBA:
+                self._helper("enable-service", "smbd.service")
+                results = [RepairResult("enable-samba", RepairStatus.SUCCESS, "Samba ativado e iniciado.")]
+            elif check.action is HealthAction.CLEAR_JOBS:
+                self._helper("clear-jobs")
+                results = [RepairResult("clear-jobs", RepairStatus.SUCCESS, "Trabalhos pendentes cancelados.")]
+            elif check.action is HealthAction.REPAIR_FILTER and isinstance(check.payload, FilterFinding):
+                results = self.repair_filter_finding(check.payload)
+            else:
+                results = [RepairResult(check.code, RepairStatus.SKIPPED, "Não existe correção automática segura para esta condição.")]
+        except PrinterManagerError as exc:
+            return [RepairResult(check.code, RepairStatus.FAILED, str(exc))]
+
+        current = {item.code: item for item in PrinterHealthService().run_all()}
+        refreshed = current.get(check.code)
+        if refreshed is None or refreshed.severity.value == "ok":
+            results.append(RepairResult("verification", RepairStatus.SUCCESS, "A nova verificação confirmou que o problema foi resolvido."))
+        else:
+            results.append(RepairResult("verification", RepairStatus.FAILED, f"A condição ainda aparece: {refreshed.summary}"))
+        return results
+
+    def repair_safe_checks(self, checks: list[HealthCheck]) -> list[RepairResult]:
+        results: list[RepairResult] = []
+        seen: set[HealthAction] = set()
+        for check in checks:
+            if not check.safe_automatic or check.action in {HealthAction.NONE, HealthAction.REPAIR_FILTER}:
+                continue
+            if check.action in seen:
+                continue
+            seen.add(check.action)
+            results.extend(self.repair_health_check(check))
+        return results or [RepairResult("automatic", RepairStatus.SKIPPED, "Nenhuma correção automática segura era necessária.")]
 
     def repair_filter_finding(self, finding: FilterFinding) -> list[RepairResult]:
         results: list[RepairResult] = []
@@ -65,11 +116,9 @@ class RepairService:
                 results.append(RepairResult("fix-permissions", RepairStatus.FAILED, str(exc)))
 
         if RepairAction.CHECK_PPD in finding.actions:
-            results.append(RepairResult("check-ppd", RepairStatus.SKIPPED, "PPD pertence à fila afetada; recrie a fila ou selecione outro driver"))
-
+            results.append(RepairResult("check-ppd", RepairStatus.SKIPPED, "O driver pertence à fila afetada. Remova e reinstale a fila escolhendo o modelo exato."))
         if RepairAction.CHECK_BACKEND in finding.actions:
-            results.append(RepairResult("check-backend", RepairStatus.SKIPPED, "Verifique conectividade, URI e credenciais da impressora; não há reparo genérico seguro"))
-
+            results.append(RepairResult("check-backend", RepairStatus.SKIPPED, "Confira IP/hostname, URI, compartilhamento e credenciais da impressora."))
         if RepairAction.RESTART_CUPS in finding.actions:
             try:
                 self._helper("restart-cups")

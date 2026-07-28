@@ -16,6 +16,7 @@ def test_helper_refuses_to_run_without_root(monkeypatch) -> None:
 def test_helper_rejects_queue_collision_before_lpadmin(monkeypatch, tmp_path) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(privileged.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(privileged.os, "fchown", lambda *_args: None)
     monkeypatch.setattr(privileged, "QUEUE_LOCK", tmp_path / "queue.lock")
     monkeypatch.setattr(privileged, "_queue_exists", lambda _name: True)
     monkeypatch.setattr(
@@ -31,6 +32,7 @@ def test_helper_rejects_queue_collision_before_lpadmin(monkeypatch, tmp_path) ->
 def test_smb_password_enters_through_stdin_not_helper_arguments(monkeypatch, tmp_path) -> None:
     calls: list[tuple[str, str, str]] = []
     monkeypatch.setattr(privileged.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(privileged.os, "fchown", lambda *_args: None)
     monkeypatch.setattr(privileged, "QUEUE_LOCK", tmp_path / "queue.lock")
     monkeypatch.setattr(privileged, "_queue_exists", lambda _name: False)
     monkeypatch.setattr(privileged.sys, "stdin", StringIO("senha com espaço\n"))

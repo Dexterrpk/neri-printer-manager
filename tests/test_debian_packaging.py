@@ -26,3 +26,11 @@ def test_launchers_use_the_bundled_application() -> None:
     assert "exec /usr/bin/python3 -m neri_printer_manager.app" in script
     assert "exec /usr/bin/python3 -m neri_printer_manager.cli" in script
     assert "exec /usr/bin/python3 -m neri_printer_manager.privileged" in helper
+
+
+def test_debian_package_removes_pyside_development_files() -> None:
+    script = (PROJECT / "scripts/build_deb.sh").read_text(encoding="utf-8")
+
+    assert '"$PYTHON_LIB/bin"' in script
+    assert '"$PYSIDE_ROOT/include"' in script
+    assert "-name '*.pyi' -delete" in script

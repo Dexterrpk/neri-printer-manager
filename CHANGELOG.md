@@ -11,6 +11,8 @@ Este projeto segue versionamento semântico.
 - O pacote passa a trazer a aplicação Python pronta, sem criar ambiente virtual
   nem executar `pip` durante o `apt install`.
 - O helper PolicyKit e os lançadores usam diretamente o runtime empacotado.
+- Ferramentas de desenvolvimento do PySide6 que não são usadas pelo aplicativo
+  deixaram de aumentar o tamanho do instalador.
 
 ## 2.0.0 — 2026-07-21
 

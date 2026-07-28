@@ -29,8 +29,18 @@ Também estão incluídos:
 
 ## Instalação no Linux Mint
 
-Execute no terminal do usuário que utilizará o programa, sem abrir antes um
-shell root:
+Se você baixou o pacote Debian, abra o terminal na pasta onde ele foi salvo e
+execute:
+
+```bash
+sudo apt install ./neri-printer.deb
+```
+
+O nome curto facilita a instalação; internamente, o pacote e os comandos
+continuam usando `neri-printer-manager`.
+
+Para instalar diretamente pelo repositório, execute no terminal do usuário que
+utilizará o programa, sem abrir antes um shell root:
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash

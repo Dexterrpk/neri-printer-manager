@@ -2,6 +2,13 @@ name: Package
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/package.yml"
+      - "packaging/**"
+      - "scripts/build_deb.sh"
+      - "src/**"
+      - "pyproject.toml"
   push:
     tags:
       - "v*"
@@ -11,7 +18,10 @@ permissions:
 
 jobs:
   deb:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,13 +41,18 @@ jobs:
       - name: Install and smoke-test package
         run: |
           sudo apt-get install -y --no-install-recommends ./build/*.deb
+          dpkg-query -W -f='${Status} ${Version}\n' neri-printer-manager
           neri-printer-cli --version
-          QT_QPA_PLATFORM=offscreen /opt/neri-printer-manager/venv/bin/python -c \
-            'from neri_printer_manager.app import MainWindow'
+          QT_QPA_PLATFORM=offscreen \
+            PYTHONPATH=/opt/neri-printer-manager/lib \
+            /usr/bin/python3 -c \
+            'from PySide6.QtWidgets import QApplication; from neri_printer_manager.app import MainWindow; app = QApplication([]); window = MainWindow(auto_refresh=False); assert window.pages.count() == 7; window.close()'
+          sudo apt-get remove -y neri-printer-manager
+          test ! -e /usr/bin/neri-printer-manager
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: neri-printer-manager-deb
+          name: neri-printer-manager-deb-${{ matrix.os }}
           path: build/*.deb
           if-no-files-found: error
           retention-days: 14

@@ -72,6 +72,8 @@ e repete a verificação correspondente depois da mudança.
 
 ## Empacotamento
 
-O `.deb` inclui wheels Python offline. Por causa dos binários do PySide6, o pacote
-usa a arquitetura real da máquina de build, nunca `Architecture: all`. O Samba e
-drivers adicionais são recomendações; `cups-browsed` é apenas sugestão.
+O `.deb` inclui a aplicação e o PySide6 já instalados em um diretório privado.
+Nenhum ambiente virtual é criado e nenhum comando `pip` é executado na máquina do
+usuário durante a instalação. Por causa dos binários do PySide6, o pacote usa a
+arquitetura real da máquina de build, nunca `Architecture: all`. O Samba e drivers
+adicionais são recomendações; `cups-browsed` é apenas sugestão.

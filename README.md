@@ -1,150 +1,155 @@
 # Neri Printer Manager
 
-Aplicativo para descobrir, instalar, compartilhar, diagnosticar e administrar impressoras no Linux Mint e derivados Ubuntu.
+Gerenciador de impressoras para Linux Mint com descoberta, instalação,
+compartilhamento e diagnóstico em uma interface PySide6. A versão atual é **2.0.0**.
 
-## Versão atual: 1.5.0
+O aplicativo cobre impressoras USB, equipamentos de rede/RJ45 e filas publicadas
+por Linux Mint ou Windows. A interface roda como usuário comum; somente as ações
+administrativas previamente autorizadas passam por PolicyKit.
 
-### Principais recursos
+![Tela inicial do Neri Printer Manager](docs/screenshots/overview.png)
 
-- Busca por IP, hostname, DNS, mDNS e NetBIOS.
-- Impressoras IPP/IPPS, JetDirect, LPD e compartilhamentos SMB autenticados.
-- Descoberta com nome, modelo, hostname, IP, protocolo e fila local separados.
-- Seleção automática de PPD/driver com HPLIP, HPCUPS, Gutenprint e Foomatic.
-- Driver PCL/PostScript genérico somente como último recurso.
-- Instalação USB, compartilhamento, filas, relatórios e pacote de suporte.
-- Central de saúde com diagnóstico explicável, correção selecionada, correção automática segura e verificação pós-reparo.
+## Cenários atendidos
 
-## Instalação universal — método recomendado
+| Origem | Descoberta/conexão | Comportamento |
+|---|---|---|
+| USB local | Backend USB do CUPS | Identifica fabricante/modelo e prioriza o driver instalado mais compatível |
+| Impressora de rede | IP/hostname, IPP/IPPS, JetDirect e LPD | Prioriza IPP e testa alternativas seguras quando necessário |
+| Outro Linux Mint | Filas do CUPS remoto | Enumera as filas reais em `ipp://host:631/printers/fila` |
+| Windows/Samba | NetBIOS/DNS e SMB autenticado | Consulta os compartilhamentos sem gravar a senha em log |
+| Mint compartilhando | CUPS e Samba | Publica apenas a fila escolhida e mantém o acesso Samba autenticado |
 
-Execute **como o usuário comum que utilizará o programa**, sem entrar antes em `su` ou em um shell root:
+Também estão incluídos:
+
+- fila de trabalhos, cancelamento, pausa, retomada, impressora padrão e página de teste;
+- central de saúde com correções limitadas, confirmação e nova verificação;
+- relatório HTML, pacote ZIP de suporte com logs higienizados e backup com SHA-256;
+- CLI para suporte técnico e automação;
+- empacotamento `.deb`, ambiente de desenvolvimento e CI para Python 3.10/3.12.
+
+## Instalação no Linux Mint
+
+Execute no terminal do usuário que utilizará o programa, sem abrir antes um
+shell root:
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
 ```
 
-Caso `wget` não esteja disponível:
+Alternativa com `curl`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
 ```
 
-O instalador escolhe a autenticação nesta ordem:
+O bootstrap preserva uma cópia local com alterações ou histórico divergente. Ele
+só faz atualização *fast-forward* de uma `main` limpa; nos demais casos usa uma
+cópia temporária da versão oficial.
 
-1. usa `sudo` quando o usuário realmente possui autorização;
-2. usa a janela gráfica do **PolicyKit**, permitindo informar ou escolher uma conta administrativa;
-3. usa `su` somente quando não houver agente PolicyKit disponível;
-4. encerra com uma mensagem clara quando nenhuma credencial administrativa válida estiver disponível.
-
-A senha é solicitada na primeira operação administrativa real. Depois disso, `sudo` ou PolicyKit podem manter a autorização em cache por alguns minutos; isso é comportamento normal do Linux.
-
-> A senha pedida pelo `su` é a senha do **root**, e pode ser diferente da senha do usuário comum. Em instalações Mint com root bloqueado, autorize pela janela gráfica do PolicyKit ou peça a um administrador da máquina.
-
-Além da autenticação, o script:
-
-- identifica o usuário comum e sua pasta pessoal;
-- baixa ou atualiza o projeto;
-- escolhe instalação normal na primeira execução e modo rápido nas atualizações;
-- verifica os pacotes já instalados e baixa apenas o que estiver ausente;
-- configura CUPS, Avahi e Samba;
-- adiciona o usuário aos grupos `lp`, `lpadmin` e `sambashare`, quando existirem;
-- instala atalhos globais e no menu;
-- valida dependências, testes e abertura da interface;
-- preserva a versão anterior se a atualização falhar.
-
-## Atualização rápida
+Modos disponíveis:
 
 ```bash
+# Atualiza reutilizando um ambiente íntegro
 wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --fast
-```
 
-O modo rápido não executa APT quando o ambiente existente está íntegro. Ele reutiliza PySide6 e as demais dependências, reinstala somente o programa, executa os testes e mantém rollback.
-
-## Reparo completo
-
-```bash
+# Reinstala dependências e recria o ambiente
 wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --repair
 ```
 
-O reparo reinstala as dependências do sistema, recria o ambiente Python e reconfigura serviços, atalhos e permissões.
-
-## Central de saúde e correção
-
-Abra **Central de saúde e correção** e clique em **Fazer diagnóstico completo**.
-
-A versão 1.5.0 verifica de forma independente:
-
-- dependências obrigatórias;
-- serviço e agendador do CUPS;
-- porta local 631;
-- Avahi/mDNS;
-- Samba;
-- filas instaladas e filas desativadas;
-- trabalhos pendentes;
-- disponibilidade do PolicyKit;
-- filtros, backends, PPDs e Ghostscript.
-
-A tela mostra quatro informações por linha:
-
-1. área afetada;
-2. situação em linguagem clara (`OK`, `ATENÇÃO` ou `PROBLEMA`);
-3. o que foi encontrado;
-4. solução recomendada.
-
-### Botões
-
-- **Ver detalhes:** mostra a causa e a evidência técnica.
-- **Corrigir selecionado:** executa somente a ação da linha escolhida.
-- **Corrigir automaticamente:** aplica apenas ações consideradas seguras, como instalar componentes obrigatórios, ativar serviços e reiniciar o CUPS.
-- Depois de cada reparo, o programa repete o diagnóstico e informa se o problema realmente desapareceu.
-
-O programa não altera automaticamente credenciais, endereço de impressora ou escolha específica de driver. Esses casos mostram uma orientação objetiva para evitar quebrar filas funcionais.
-
-## Depois da instalação
-
-Abra pelo menu do Mint ou execute como usuário comum:
+Depois da instalação, abra normalmente como usuário comum:
 
 ```bash
 neri-printer-manager
+neri-printer-cli --version
 ```
 
-Verificação:
+Quando uma operação exigir privilégios administrativos, o próprio aplicativo
+solicitará a senha pelo PolicyKit. Para diagnóstico ou suporte técnico, também é
+possível iniciar toda a interface como administrador:
 
 ```bash
-neri-printer-cli --help
-/opt/neri-printer-manager/venv/bin/python -m pip show neri-printer-manager | grep Version
-/opt/neri-printer-manager/venv/bin/python -m pip check
+sudo -H neri-printer-manager
 ```
 
-Se o usuário acabou de ser adicionado ao grupo `lpadmin`, encerre e abra a sessão do Mint uma vez para aplicar a nova associação.
+O modo com `sudo` concede privilégio total à interface e, por isso, deve ser
+usado somente quando a execução normal não resolver o problema. A opção `-H`
+evita criar arquivos pertencentes ao root na pasta pessoal do usuário.
 
-Log da instalação:
+Para remover uma instalação feita pelo bootstrap, execute
+`sudo ./uninstall.sh` dentro do projeto. Se tiver usado o pacote `.deb`, use
+`sudo apt remove neri-printer-manager`; as filas e configurações do CUPS são
+preservadas nos dois casos.
 
-```bash
-pkexec tail -n 200 /var/log/neri-printer-manager-install.log
-```
+O instalador não instala `cups-browsed`. Se esse serviço já estiver ativo por
+decisão da distribuição, suas filas `implicitclass://` são classificadas como
+publicações remotas e não aparecem em **Minhas impressoras**.
 
-## Impressora compartilhada por Windows ou outro computador
+## Uso rápido
 
-1. Abra **Encontrar na rede**.
-2. Digite o hostname ou IP do computador.
-3. Informe o usuário no formato exigido pelo servidor, por exemplo `same`, `suporte`, `DOMINIO\\same` ou `COMPUTADOR\\suporte`.
-4. Informe a senha e clique em **Buscar**.
-5. Selecione a impressora e clique em **Instalar selecionada**.
+1. Para rede, digite o IP ou hostname na tela inicial.
+2. Para Windows, informe usuário e senha SMB somente quando solicitado.
+3. Confira a opção recomendada, escolha um nome local e instale.
+4. Para USB, abra **Ferramentas técnicas → USB**.
+5. Se algo falhar, abra **Corrigir problemas** e execute o diagnóstico completo.
 
-O programa usa as credenciais durante a instalação, procura o melhor PPD disponível, ativa a fila e envia uma página de teste. Senhas não devem ser gravadas no GitHub ou no README.
-
-## Impressora USB
-
-1. Conecte e ligue a impressora.
-2. Abra **Ferramentas**.
-3. Clique em **Procurar USB**.
-4. Confira fabricante, modelo e driver recomendado.
-5. Instale a impressora selecionada e confirme a página de teste.
+O [manual do usuário](docs/USER_GUIDE.md) detalha cada fluxo e as limitações.
 
 ## Segurança
 
-A interface roda como usuário comum. Ações administrativas usam PolicyKit. O helper aceita somente pacotes, serviços e operações presentes em uma lista interna. Nomes de filas e URIs são validados e nenhum comando externo é executado com `shell=True`.
+- Nenhum comando usa `shell=True`.
+- Nomes de fila, identificadores de driver, hostnames e URIs são validados duas vezes:
+  na aplicação e novamente após a elevação.
+- O helper PolicyKit aceita apenas um catálogo fixo de operações, pacotes e serviços.
+- A senha SMB segue por entrada padrão e pela API local do CUPS; não entra em
+  nenhuma linha de comando.
+- Logs e relatórios removem *userinfo*, senhas, tokens e cabeçalhos de autorização.
+- O compartilhamento CUPS usa a política de rede local e desativa explicitamente
+  acesso irrestrito e administração remota.
+- A interface nunca precisa ser executada como root nem concede `lpadmin` ao usuário.
 
-## Estado de homologação
+Consulte [SECURITY.md](SECURITY.md) e a
+[arquitetura](docs/ARCHITECTURE.md) para a fronteira de privilégio completa.
 
-A versão 1.5.0 reorganiza a correção de erros em uma central unificada, com ações limitadas, confirmação e verificação pós-reparo. A confirmação final de impressão ainda depende do modelo físico, driver disponível, políticas SMB, firewall e configuração do computador que compartilha a impressora.
+## Desenvolvimento e validação
+
+```bash
+sudo apt install python3-cups
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -e '.[dev]'
+QT_QPA_PLATFORM=offscreen .venv/bin/pytest -q
+.venv/bin/ruff format --check .
+.venv/bin/ruff check .
+.venv/bin/mypy src
+```
+
+Ou execute tudo com:
+
+```bash
+bash scripts/validate.sh
+```
+
+Para gerar o pacote Debian:
+
+```bash
+bash scripts/build_deb.sh
+```
+
+O artefato é criado em `build/` com a versão do `pyproject.toml` e a
+arquitetura informada por `dpkg`.
+
+## Estado de liberação
+
+Os testes automatizados cobrem validação, descoberta, seleção de protocolo,
+instalação, higienização e fronteira administrativa. A confirmação final de
+impressão exige hardware real, driver compatível e as políticas da rede/servidor.
+A matriz obrigatória está em [docs/HOMOLOGATION.md](docs/HOMOLOGATION.md).
+
+## Documentação
+
+- [Manual do usuário](docs/USER_GUIDE.md)
+- [Arquitetura e fluxo de dados](docs/ARCHITECTURE.md)
+- [Solução de problemas](docs/TROUBLESHOOTING.md)
+- [Homologação em hardware real](docs/HOMOLOGATION.md)
+- [Histórico de mudanças](CHANGELOG.md)
+
+Licenciado sob a [MIT License](LICENSE).

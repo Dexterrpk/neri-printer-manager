@@ -1,13 +1,14 @@
 """Backup e restauração controlada das configurações de impressão."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import hashlib
 import json
 import shutil
-import tarfile
+from dataclasses import dataclass
+from pathlib import Path
+
+from .core import CommandRunner, PrinterManagerError, run_admin_action
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,9 @@ class BackupService:
         Path("/etc/samba/smb.conf"),
     )
 
+    def __init__(self, runner: CommandRunner | None = None) -> None:
+        self.runner = runner or CommandRunner(timeout=180)
+
     @staticmethod
     def _digest(path: Path) -> str:
         digest = hashlib.sha256()
@@ -35,28 +39,25 @@ class BackupService:
         return digest.hexdigest()
 
     def create(self, destination: Path) -> BackupInfo:
-        destination.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        archive = destination / f"neri-printer-backup-{timestamp}.tar.gz"
-        existing = [path for path in self.SOURCES if path.exists()]
-        with tarfile.open(archive, "w:gz") as tar:
-            for source in existing:
-                tar.add(source, arcname=str(source).lstrip("/"), recursive=True)
-        checksum = self._digest(archive)
-        manifest = archive.with_suffix(archive.suffix + ".json")
-        manifest.write_text(
-            json.dumps(
-                {
-                    "created_at": timestamp,
-                    "archive": archive.name,
-                    "sha256": checksum,
-                    "sources": [str(path) for path in existing],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        if not destination.is_dir():
+            raise PrinterManagerError("Escolha uma pasta existente para salvar o backup.")
+        result = run_admin_action(
+            self.runner,
+            "create-backup",
+            str(destination.resolve()),
         )
+        try:
+            payload = json.loads(result.stdout.splitlines()[-1])
+            archive = Path(str(payload["archive_path"]))
+            manifest = Path(str(payload["manifest_path"]))
+            timestamp = str(payload["created_at"])
+            checksum = str(payload["sha256"])
+        except (IndexError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise PrinterManagerError(
+                "O backup foi solicitado, mas o helper não devolveu uma confirmação válida."
+            ) from exc
+        if not archive.is_file() or not manifest.is_file():
+            raise PrinterManagerError("O arquivo de backup não foi criado corretamente.")
         return BackupInfo(archive, manifest, timestamp, checksum)
 
     def verify(self, archive: Path, expected_sha256: str) -> bool:

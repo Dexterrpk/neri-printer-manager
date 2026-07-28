@@ -1,5 +1,5 @@
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 from neri_printer_manager.reports import ReportService
 
@@ -31,3 +31,16 @@ def test_support_bundle_contains_reports(monkeypatch, tmp_path: Path) -> None:
     assert archive.is_file()
     with zipfile.ZipFile(archive) as bundle:
         assert {"report.json", "report.html"}.issubset(set(bundle.namelist()))
+
+
+def test_copied_support_log_does_not_contain_credentials(tmp_path: Path) -> None:
+    source = tmp_path / "source.log"
+    target = tmp_path / "redacted.log"
+    source.write_text(
+        "backend smb://DOMINIO%5Cuser:senha-secreta@server/HP failed\n",
+        encoding="utf-8",
+    )
+    ReportService._copy_redacted_log(source, target)
+    content = target.read_text(encoding="utf-8")
+    assert "senha-secreta" not in content
+    assert "smb://***@server/HP" in content

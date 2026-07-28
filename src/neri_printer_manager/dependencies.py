@@ -3,11 +3,12 @@
 O módulo apenas detecta e planeja. A instalação é delegada ao helper privilegiado,
 que aceita somente pacotes previamente autorizados.
 """
+
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
-import re
 
 from .core import CommandRunner, PrinterManagerError
 
@@ -23,6 +24,7 @@ class PackageRequirement:
     name: str
     reason: str
     required: bool = True
+    automatic: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +37,7 @@ class PackageStatus:
 CORE_PACKAGES: tuple[PackageRequirement, ...] = (
     PackageRequirement("cups", "Servidor de impressão CUPS"),
     PackageRequirement("cups-client", "Ferramentas lpstat, lpadmin e lp"),
-    PackageRequirement("cups-browsed", "Descoberta e filas remotas"),
+    PackageRequirement("python3-cups", "API segura de administração do CUPS"),
     PackageRequirement("cups-filters", "Filtros modernos de impressão"),
     PackageRequirement("ghostscript", "Conversão PostScript/PDF"),
     PackageRequirement("avahi-daemon", "Descoberta mDNS/Bonjour"),
@@ -43,8 +45,17 @@ CORE_PACKAGES: tuple[PackageRequirement, ...] = (
     PackageRequirement("policykit-1", "Autorização administrativa segura"),
     PackageRequirement("samba", "Compartilhamento com Windows", required=False),
     PackageRequirement("smbclient", "Diagnóstico de compartilhamentos SMB", required=False),
+    PackageRequirement("samba-common-bin", "Usuários e validação do Samba", required=False),
+    PackageRequirement("hplip", "Suporte ampliado para impressoras HP", required=False),
+    PackageRequirement("printer-driver-hpcups", "Drivers HP para CUPS", required=False),
     PackageRequirement("printer-driver-gutenprint", "Drivers genéricos Gutenprint", required=False),
     PackageRequirement("foomatic-db-compressed-ppds", "Base adicional de PPDs", required=False),
+    PackageRequirement(
+        "cups-browsed",
+        "Criação automática de filas publicadas (desativada por padrão)",
+        required=False,
+        automatic=False,
+    ),
 )
 
 _ALLOWED_PACKAGE = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,99}$")
@@ -76,7 +87,7 @@ class DependencyService:
         for item in self.audit():
             if item.state is not PackageState.MISSING:
                 continue
-            if item.requirement.required or include_optional:
+            if item.requirement.required or (include_optional and item.requirement.automatic):
                 packages.append(item.requirement.name)
         return packages
 

@@ -1,10 +1,11 @@
 """Diagnóstico de rede para protocolos de impressão."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 import ipaddress
 import socket
+from dataclasses import dataclass
+from enum import Enum
 
 
 class PortState(str, Enum):
@@ -42,7 +43,10 @@ class NetworkService:
             return value
         except ValueError:
             labels = value.rstrip(".").split(".")
-            if any(not label or len(label) > 63 for label in labels):
+            if any(
+                not label or len(label) > 63 or label.startswith("-") or label.endswith("-")
+                for label in labels
+            ):
                 raise ValueError("Host inválido")
             allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
             if any(any(char not in allowed for char in label) for label in labels):
@@ -52,10 +56,14 @@ class NetworkService:
     def check_port(self, host: str, port: int, timeout: float = 2.0) -> PortCheck:
         safe_host = self.validate_host(host)
         if port not in PRINTER_PORTS:
-            return PortCheck(safe_host, port, "Desconhecido", PortState.INVALID, "Porta não autorizada")
+            return PortCheck(
+                safe_host, port, "Desconhecido", PortState.INVALID, "Porta não autorizada"
+            )
         try:
             with socket.create_connection((safe_host, port), timeout=timeout):
-                return PortCheck(safe_host, port, PRINTER_PORTS[port], PortState.OPEN, "Respondendo")
+                return PortCheck(
+                    safe_host, port, PRINTER_PORTS[port], PortState.OPEN, "Respondendo"
+                )
         except OSError as exc:
             return PortCheck(safe_host, port, PRINTER_PORTS[port], PortState.CLOSED, str(exc))
 

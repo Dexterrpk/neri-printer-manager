@@ -15,6 +15,11 @@
       "label": "Neri: Executar testes",
       "type": "shell",
       "command": ".venv/bin/pytest -q",
+      "options": {
+        "env": {
+          "QT_QPA_PLATFORM": "offscreen"
+        }
+      },
       "group": "test",
       "problemMatcher": []
     },

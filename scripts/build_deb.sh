@@ -1,63 +1,117 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="${VERSION:-1.0.0}"
-ARCH="${ARCH:-all}"
-ROOT="build/deb/neri-printer-manager_${VERSION}_${ARCH}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
 
-rm -rf build/deb
-install -d "${ROOT}/DEBIAN"
-install -d "${ROOT}/opt/neri-printer-manager"
-install -d "${ROOT}/usr/local/bin"
-install -d "${ROOT}/usr/libexec"
-install -d "${ROOT}/usr/share/applications"
-install -d "${ROOT}/usr/share/polkit-1/actions"
+PROJECT_VERSION=$(python3 -c \
+  'import pathlib, re; text=pathlib.Path("pyproject.toml").read_text(); match=re.search(r"(?m)^version = \"([^\"]+)\"$", text); print(match.group(1) if match else "")')
+[[ -n "$PROJECT_VERSION" ]] || {
+  echo "Não foi possível ler a versão em pyproject.toml." >&2
+  exit 2
+}
+VERSION="${VERSION:-$PROJECT_VERSION}"
+ARCH="${ARCH:-$(dpkg --print-architecture)}"
+[[ "$VERSION" =~ ^[0-9][0-9A-Za-z.+:~-]*$ ]] || {
+  echo "Versão Debian inválida: $VERSION" >&2
+  exit 2
+}
+[[ "$ARCH" =~ ^[a-z0-9][a-z0-9-]*$ ]] || {
+  echo "Arquitetura Debian inválida: $ARCH" >&2
+  exit 2
+}
 
-cat > "${ROOT}/DEBIAN/control" <<EOF
+BUILD_ROOT="$PROJECT_ROOT/build/deb"
+PACKAGE_ROOT="$BUILD_ROOT/neri-printer-manager_${VERSION}_${ARCH}"
+OUTPUT="$PROJECT_ROOT/build/neri-printer-manager_${VERSION}_${ARCH}.deb"
+rm -rf -- "$BUILD_ROOT"
+install -d "$PACKAGE_ROOT/DEBIAN"
+install -d "$PACKAGE_ROOT/opt/neri-printer-manager/wheels"
+install -d "$PACKAGE_ROOT/usr/bin"
+install -d "$PACKAGE_ROOT/usr/libexec"
+install -d "$PACKAGE_ROOT/usr/share/applications"
+install -d "$PACKAGE_ROOT/usr/share/doc/neri-printer-manager/docs/screenshots"
+install -d "$PACKAGE_ROOT/usr/share/polkit-1/actions"
+
+cat > "$PACKAGE_ROOT/DEBIAN/control" <<EOF
 Package: neri-printer-manager
-Version: ${VERSION}
+Version: $VERSION
 Section: admin
 Priority: optional
-Architecture: ${ARCH}
-Maintainer: Neri InfoTech
-Depends: python3 (>= 3.10), python3-venv, cups, cups-client, cups-browsed, cups-filters, ghostscript, avahi-daemon, avahi-utils, policykit-1, libxcb-cursor0, libxkbcommon-x11-0, libxcb-xinerama0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libegl1, libgl1
-Recommends: samba, smbclient, printer-driver-gutenprint, foomatic-db-compressed-ppds
-Description: Gerenciador e diagnóstico profissional de impressoras para Linux Mint
+Architecture: $ARCH
+Maintainer: Neri InfoTech <Dexterrpk@users.noreply.github.com>
+Depends: python3 (>= 3.10), python3-venv, python3-cups, cups, cups-client, cups-filters, ghostscript, avahi-daemon, avahi-utils, libnss-mdns, policykit-1, libxcb-cursor0, libxkbcommon-x11-0, libxcb-xinerama0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libegl1, libgl1, libdbus-1-3, libfontconfig1, libglib2.0-0
+Recommends: samba, smbclient, samba-common-bin, hplip, printer-driver-hpcups, printer-driver-gutenprint, foomatic-db-compressed-ppds
+Suggests: cups-browsed
+Homepage: https://github.com/Dexterrpk/neri-printer-manager
+Description: Gerenciador seguro de impressoras para Linux Mint
+ Descobre, instala, compartilha e diagnostica impressoras USB, IPP,
+ JetDirect, LPD e SMB com interface PySide6 e autorização PolicyKit.
 EOF
 
-cat > "${ROOT}/DEBIAN/postinst" <<'EOF'
+cat > "$PACKAGE_ROOT/DEBIAN/postinst" <<'EOF'
 #!/usr/bin/env bash
 set -e
-if [[ ! -x /opt/neri-printer-manager/venv/bin/python ]]; then
-  python3 -m venv /opt/neri-printer-manager/venv
+if [[ ! -x /opt/neri-printer-manager/venv/bin/python ]] ||
+   ! /opt/neri-printer-manager/venv/bin/python -c 'import cups' >/dev/null 2>&1 ||
+   ! /opt/neri-printer-manager/venv/bin/python -m pip --version >/dev/null 2>&1; then
+  rm -rf -- /opt/neri-printer-manager/venv
+  /usr/bin/python3 -m venv --system-site-packages /opt/neri-printer-manager/venv
 fi
-/opt/neri-printer-manager/venv/bin/pip install --disable-pip-version-check --no-index --find-links /opt/neri-printer-manager/wheels neri-printer-manager
+/opt/neri-printer-manager/venv/bin/python -m pip install \
+  --disable-pip-version-check --no-index --upgrade --force-reinstall \
+  --find-links /opt/neri-printer-manager/wheels neri-printer-manager
+/opt/neri-printer-manager/venv/bin/python -m pip check
 systemctl enable --now cups.service avahi-daemon.service || true
+systemctl try-restart cups.service || true
 update-desktop-database >/dev/null 2>&1 || true
 EOF
-chmod 0755 "${ROOT}/DEBIAN/postinst"
+chmod 0755 "$PACKAGE_ROOT/DEBIAN/postinst"
 
-cat > "${ROOT}/DEBIAN/prerm" <<'EOF'
+cat > "$PACKAGE_ROOT/DEBIAN/postrm" <<'EOF'
 #!/usr/bin/env bash
 set -e
-rm -f /usr/local/bin/neri-printer-manager /usr/local/bin/neri-printer-cli
+case "${1:-}" in
+  remove|purge)
+    rm -rf -- /opt/neri-printer-manager
+    ;;
+esac
+update-desktop-database >/dev/null 2>&1 || true
 EOF
-chmod 0755 "${ROOT}/DEBIAN/prerm"
+chmod 0755 "$PACKAGE_ROOT/DEBIAN/postrm"
 
-python3 -m pip wheel . --wheel-dir "${ROOT}/opt/neri-printer-manager/wheels"
-install -m 0755 packaging/libexec/neri-printer-helper "${ROOT}/usr/libexec/neri-printer-helper"
-install -m 0644 packaging/debian/neri-printer-manager.desktop "${ROOT}/usr/share/applications/neri-printer-manager.desktop"
-install -m 0644 packaging/polkit/com.neriinfotech.printermanager.policy "${ROOT}/usr/share/polkit-1/actions/com.neriinfotech.printermanager.policy"
+PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_ROOT/build/pip-cache}" \
+  python3 -m pip wheel . --wheel-dir "$PACKAGE_ROOT/opt/neri-printer-manager/wheels"
+install -m 0755 packaging/libexec/neri-printer-helper \
+  "$PACKAGE_ROOT/usr/libexec/neri-printer-helper"
+install -m 0644 packaging/debian/neri-printer-manager.desktop \
+  "$PACKAGE_ROOT/usr/share/applications/neri-printer-manager.desktop"
+install -m 0644 packaging/polkit/com.neriinfotech.printermanager.policy \
+  "$PACKAGE_ROOT/usr/share/polkit-1/actions/com.neriinfotech.printermanager.policy"
+install -m 0644 README.md LICENSE SECURITY.md \
+  "$PACKAGE_ROOT/usr/share/doc/neri-printer-manager/"
+install -m 0644 LICENSE \
+  "$PACKAGE_ROOT/usr/share/doc/neri-printer-manager/copyright"
+install -m 0644 docs/ARCHITECTURE.md docs/HOMOLOGATION.md \
+  docs/TROUBLESHOOTING.md docs/USER_GUIDE.md \
+  "$PACKAGE_ROOT/usr/share/doc/neri-printer-manager/docs/"
+install -m 0644 docs/screenshots/*.png \
+  "$PACKAGE_ROOT/usr/share/doc/neri-printer-manager/docs/screenshots/"
+gzip -9n -c CHANGELOG.md > \
+  "$PACKAGE_ROOT/usr/share/doc/neri-printer-manager/changelog.gz"
 
-cat > "${ROOT}/usr/local/bin/neri-printer-manager" <<'EOF'
+cat > "$PACKAGE_ROOT/usr/bin/neri-printer-manager" <<'EOF'
 #!/usr/bin/env bash
-exec /opt/neri-printer-manager/venv/bin/neri-printer-manager "$@"
+exec /opt/neri-printer-manager/venv/bin/python -m neri_printer_manager.app "$@"
 EOF
-cat > "${ROOT}/usr/local/bin/neri-printer-cli" <<'EOF'
+cat > "$PACKAGE_ROOT/usr/bin/neri-printer-cli" <<'EOF'
 #!/usr/bin/env bash
-exec /opt/neri-printer-manager/venv/bin/neri-printer-cli "$@"
+exec /opt/neri-printer-manager/venv/bin/python -m neri_printer_manager.cli "$@"
 EOF
-chmod 0755 "${ROOT}/usr/local/bin/neri-printer-manager" "${ROOT}/usr/local/bin/neri-printer-cli"
+chmod 0755 \
+  "$PACKAGE_ROOT/usr/bin/neri-printer-manager" \
+  "$PACKAGE_ROOT/usr/bin/neri-printer-cli"
 
-dpkg-deb --build "${ROOT}" "build/neri-printer-manager_${VERSION}_${ARCH}.deb"
-echo "Pacote criado em build/neri-printer-manager_${VERSION}_${ARCH}.deb"
+dpkg-deb --root-owner-group --build "$PACKAGE_ROOT" "$OUTPUT"
+echo "Pacote criado em $OUTPUT"

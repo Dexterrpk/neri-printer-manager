@@ -18,9 +18,7 @@ def test_install_request_rejects_unknown_package() -> None:
 
 
 def test_filter_failed_signature_generates_repair_plan() -> None:
-    findings = CupsFilterService.analyze_text(
-        "E [10/Jul/2026:10:00:00] [Job 20] Filter failed"
-    )
+    findings = CupsFilterService.analyze_text("E [10/Jul/2026:10:00:00] [Job 20] Filter failed")
     assert len(findings) == 1
     assert findings[0].code == "filter_failed"
     assert RepairAction.REINSTALL_FILTERS in findings[0].actions

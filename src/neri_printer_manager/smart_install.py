@@ -1,11 +1,19 @@
 """Instalação inteligente com autenticação, driver compatível e validação da fila."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
+import ipaddress
 import re
+from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
-from .core import CommandRunner, CupsService, PrinterManagerError, validate_device_uri, validate_queue_name
+from .core import (
+    CommandRunner,
+    CupsService,
+    PrinterManagerError,
+    validate_device_uri,
+    validate_queue_name,
+)
 from .host_locator import LocatedPrinter
 
 
@@ -96,7 +104,11 @@ class SmartPrinterInstaller:
 
     @staticmethod
     def _network_fallbacks(item: LocatedPrinter) -> list[str]:
-        host = item.address
+        try:
+            address = ipaddress.ip_address(item.address)
+            host = f"[{address}]" if isinstance(address, ipaddress.IPv6Address) else str(address)
+        except ValueError:
+            host = item.address
         uris: list[str] = [item.uri]
         if item.protocol == "IPP":
             uris.extend((f"socket://{host}:9100", f"lpd://{host}/lp"))
@@ -104,15 +116,30 @@ class SmartPrinterInstaller:
             uris.append(f"lpd://{host}/lp")
         return list(dict.fromkeys(uris))
 
+    def _ensure_queue_available(self, queue: str) -> None:
+        queue_exists = getattr(self.cups, "queue_exists", None)
+        if callable(queue_exists) and queue_exists(queue):
+            raise PrinterManagerError(
+                f"Já existe uma fila chamada '{queue}'. Escolha outro nome para não "
+                "alterar uma impressora que já funciona."
+            )
+
     @staticmethod
     def _safe_display_uri(uri: str) -> str:
-        parsed = urlparse(uri)
-        if parsed.username is None:
-            return uri
-        host = parsed.hostname or ""
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return urlunparse((parsed.scheme, host, parsed.path, parsed.params, parsed.query, parsed.fragment))
+        try:
+            parsed = urlparse(uri)
+            if parsed.username is None:
+                return uri
+            host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            if parsed.port:
+                host = f"{host}:{parsed.port}"
+            return urlunparse(
+                (parsed.scheme, host, parsed.path, parsed.params, parsed.query, parsed.fragment)
+            )
+        except ValueError:
+            return "URI inválida"
 
     def _driver_candidates(self, item: LocatedPrinter) -> list[tuple[str, str]]:
         identity = " ".join(
@@ -124,38 +151,54 @@ class SmartPrinterInstaller:
     def plan(self, item: LocatedPrinter) -> list[InstallAttempt]:
         drivers = self._driver_candidates(item)
         if item.protocol == "SMB":
-            authenticated_uri = item.installation_uri()
-            return [InstallAttempt(authenticated_uri, model, description) for model, description in drivers]
+            return [InstallAttempt(item.uri, model, description) for model, description in drivers]
 
         attempts: list[InstallAttempt] = []
         for uri in self._network_fallbacks(item):
             scheme = urlparse(uri).scheme.lower()
             if scheme in {"ipp", "ipps"}:
                 attempts.append(InstallAttempt(uri, "everywhere", "IPP Everywhere / driverless"))
-            attempts.extend(InstallAttempt(uri, model, description) for model, description in drivers)
+            attempts.extend(
+                InstallAttempt(uri, model, description) for model, description in drivers
+            )
         return list(dict.fromkeys(attempts))
 
     def _validate_and_test(self, queue: str) -> bool:
-        if hasattr(self.cups, "resume"):
-            self.cups.resume(queue)
         if hasattr(self.cups, "verify_printer"):
             self.cups.verify_printer(queue)
         if hasattr(self.cups, "print_test_page"):
-            self.cups.print_test_page(queue)
-            return True
+            try:
+                self.cups.print_test_page(queue)
+                return True
+            except PrinterManagerError:
+                return False
         return False
 
     def install(self, queue: str, item: LocatedPrinter) -> InstallOutcome:
         safe_queue = validate_queue_name(queue)
+        self._ensure_queue_available(safe_queue)
         failures: list[str] = []
         attempts = self.plan(item)
         for index, attempt in enumerate(attempts, start=1):
+            created = False
             try:
-                self.cups.add_printer(
-                    safe_queue,
-                    validate_device_uri(attempt.uri),
-                    attempt.model,
-                )
+                safe_uri = validate_device_uri(attempt.uri)
+                if item.protocol == "SMB" and item.username:
+                    add_authenticated = getattr(self.cups, "add_authenticated_printer", None)
+                    if not callable(add_authenticated):
+                        raise PrinterManagerError(
+                            "O serviço CUPS não oferece o fluxo seguro de autenticação SMB."
+                        )
+                    add_authenticated(
+                        safe_queue,
+                        safe_uri,
+                        attempt.model,
+                        item.username,
+                        item.password,
+                    )
+                else:
+                    self.cups.add_printer(safe_queue, safe_uri, attempt.model)
+                created = True
                 tested = self._validate_and_test(safe_queue)
                 return InstallOutcome(
                     safe_queue,
@@ -169,10 +212,14 @@ class SmartPrinterInstaller:
                 failures.append(
                     f"{attempt.description} em {self._safe_display_uri(attempt.uri)}: {exc}"
                 )
-                try:
-                    self.cups.remove_printer(safe_queue)
-                except PrinterManagerError:
-                    pass
+                if created:
+                    try:
+                        self.cups.remove_printer(safe_queue)
+                    except PrinterManagerError:
+                        failures.append(
+                            "A tentativa criou uma fila incompleta que não pôde ser removida."
+                        )
+                        break
 
         detail = "\n".join(failures[-6:])
         raise PrinterManagerError(

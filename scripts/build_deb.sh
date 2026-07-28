@@ -94,6 +94,31 @@ PIP_CACHE_DIR="${PIP_CACHE_DIR:-$PROJECT_ROOT/build/pip-cache}" \
 python3 -m pip install \
   --disable-pip-version-check --no-index --no-deps --no-compile \
   --target "$PYTHON_LIB" "$WHEEL_DIR"/*.whl
+
+# O wheel do PySide6 também traz ferramentas de desenvolvimento, cabeçalhos e
+# arquivos de tipagem. Eles não participam da execução desta aplicação Qt
+# Widgets e aumentariam desnecessariamente o instalador.
+PYSIDE_ROOT="$PYTHON_LIB/PySide6"
+rm -rf -- \
+  "$PYTHON_LIB/bin" \
+  "$PYSIDE_ROOT/doc" \
+  "$PYSIDE_ROOT/glue" \
+  "$PYSIDE_ROOT/include" \
+  "$PYSIDE_ROOT/scripts" \
+  "$PYSIDE_ROOT/support" \
+  "$PYSIDE_ROOT/typesystems"
+find "$PYSIDE_ROOT" -maxdepth 1 -type f -name '*.pyi' -delete
+rm -f -- \
+  "$PYSIDE_ROOT/assistant" \
+  "$PYSIDE_ROOT/designer" \
+  "$PYSIDE_ROOT/linguist" \
+  "$PYSIDE_ROOT/lrelease" \
+  "$PYSIDE_ROOT/lupdate" \
+  "$PYSIDE_ROOT/qmlformat" \
+  "$PYSIDE_ROOT/qmllint" \
+  "$PYSIDE_ROOT/qmlls" \
+  "$PYSIDE_ROOT/svgtoqml"
+
 install -m 0755 packaging/libexec/neri-printer-helper \
   "$PACKAGE_ROOT/usr/libexec/neri-printer-helper"
 install -m 0644 packaging/debian/neri-printer-manager.desktop \

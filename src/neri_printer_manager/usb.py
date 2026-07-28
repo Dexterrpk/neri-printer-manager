@@ -1,11 +1,19 @@
 """Detecção, instalação e compartilhamento seguro de impressoras USB."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 
-from .core import CommandRunner, CupsService, PrinterManagerError, validate_queue_name
+from .core import (
+    CommandRunner,
+    CupsService,
+    PrinterManagerError,
+    validate_device_uri,
+    validate_queue_name,
+)
+from .sharing import SharingService
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +37,7 @@ class UsbPrinterService:
 
     def __init__(self, runner: CommandRunner | None = None) -> None:
         self.runner = runner or CommandRunner(timeout=40)
+        self.cups = CupsService(self.runner)
 
     def detect(self) -> list[UsbPrinter]:
         result = self.runner.run(["lpinfo", "-v"], check=False)
@@ -37,16 +46,21 @@ class UsbPrinterService:
         seen: set[str] = set()
         for line in result.stdout.splitlines():
             parts = line.split(maxsplit=1)
-            if len(parts) != 2 or not parts[1].lower().startswith("usb://"):
+            if len(parts) != 2 or not parts[1].lower().startswith(("usb://", "hp:/usb/")):
                 continue
-            uri = parts[1].strip()
+            try:
+                uri = validate_device_uri(parts[1].strip())
+            except PrinterManagerError:
+                continue
             if uri in seen:
                 continue
             seen.add(uri)
             manufacturer, model = self._identity(uri)
             driver, description = self._best_driver(manufacturer, model, models)
             name = " ".join(value for value in (manufacturer, model) if value).strip()
-            found.append(UsbPrinter(uri, name or "Impressora USB", manufacturer, model, driver, description))
+            found.append(
+                UsbPrinter(uri, name or "Impressora USB", manufacturer, model, driver, description)
+            )
         return found
 
     def _models(self) -> list[tuple[str, str]]:
@@ -61,12 +75,21 @@ class UsbPrinterService:
     @staticmethod
     def _identity(uri: str) -> tuple[str, str]:
         parsed = urlparse(uri)
+        if parsed.scheme.lower() == "hp":
+            model = unquote(parsed.path.removeprefix("/usb/")).replace("_", " ").strip()
+            return "HP", model
         manufacturer = unquote(parsed.netloc).replace("_", " ").strip()
         model = unquote(parsed.path.strip("/")).replace("_", " ").strip()
         return manufacturer, model
 
-    def _best_driver(self, manufacturer: str, model: str, rows: list[tuple[str, str]]) -> tuple[str, str]:
-        tokens = [token.lower() for token in re.findall(r"[A-Za-z0-9]+", f"{manufacturer} {model}") if len(token) >= 2]
+    def _best_driver(
+        self, manufacturer: str, model: str, rows: list[tuple[str, str]]
+    ) -> tuple[str, str]:
+        tokens = [
+            token.lower()
+            for token in re.findall(r"[A-Za-z0-9]+", f"{manufacturer} {model}")
+            if len(token) >= 2
+        ]
         best: tuple[int, str, str] | None = None
         for driver, description in rows:
             text = description.lower()
@@ -83,23 +106,35 @@ class UsbPrinterService:
         return self.FALLBACKS[1]
 
     def install(self, printer: UsbPrinter, queue: str | None = None) -> str:
-        safe = validate_queue_name(queue or re.sub(r"[^A-Za-z0-9_.-]+", "-", printer.name).strip("-") or "Impressora-USB")
+        suggested = re.sub(r"[^A-Za-z0-9_.-]+", "-", printer.name).strip("-_.")[:80]
+        safe = validate_queue_name(queue or suggested or "Impressora-USB")
+        if self.cups.queue_exists(safe):
+            raise PrinterManagerError(f"Já existe uma fila chamada '{safe}'. Escolha outro nome.")
         attempts = [(printer.driver, printer.driver_description), *self.FALLBACKS[1:]]
         errors: list[str] = []
         for driver, description in dict.fromkeys(attempts):
+            created = False
             try:
-                CupsService(self.runner).add_printer(safe, printer.uri, driver)
-                return f"{safe} — {description}"
+                self.cups.add_printer(safe, printer.uri, driver)
+                created = True
+                self.cups.verify_printer(safe)
+                try:
+                    self.cups.print_test_page(safe)
+                    test_status = "página de teste enviada"
+                except PrinterManagerError:
+                    test_status = "fila instalada; a página de teste não foi enviada"
+                return f"{safe} — {description} — {test_status}"
             except PrinterManagerError as exc:
                 errors.append(str(exc))
-                try:
-                    CupsService(self.runner).remove_printer(safe)
-                except PrinterManagerError:
-                    pass
-        raise PrinterManagerError("Não foi possível instalar a impressora USB. " + " | ".join(errors[-2:]))
+                if created:
+                    try:
+                        self.cups.remove_printer(safe)
+                    except PrinterManagerError:
+                        errors.append("A fila incompleta não pôde ser removida.")
+                        break
+        raise PrinterManagerError(
+            "Não foi possível instalar a impressora USB. " + " | ".join(errors[-2:])
+        )
 
     def share(self, queue: str) -> str:
-        safe = validate_queue_name(queue)
-        helper = "/usr/libexec/neri-printer-helper"
-        self.runner.run(["pkexec", helper, "enable-printer-sharing", safe])
-        return f"A fila {safe} foi compartilhada pelo CUPS e pelo Samba."
+        return SharingService(self.runner).enable_queue(queue)

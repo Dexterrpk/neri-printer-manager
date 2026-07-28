@@ -1,13 +1,16 @@
 """Diagnóstico atual e verificável de filtros, backends e PPDs do CUPS."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
 import os
 import re
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from pathlib import Path
 
 from .core import CommandRunner, Severity
+from .security import redact_text
 
 
 class RepairAction(str, Enum):
@@ -92,15 +95,30 @@ class CupsFilterService:
                 if pattern.search(line):
                     findings.setdefault(
                         code,
-                        FilterFinding(code, title, Severity.ERROR, line[:500], actions, "Log recente"),
+                        FilterFinding(
+                            code,
+                            title,
+                            Severity.ERROR,
+                            redact_text(line[:500]),
+                            actions,
+                            "Log recente",
+                        ),
                     )
         return list(findings.values())
 
     def read_recent_errors(self, minutes: int = 30, lines: int = 250) -> str:
         journal = self.runner.run(
             [
-                "journalctl", "-u", "cups.service", "--since", f"-{minutes} minutes",
-                "-n", str(lines), "--no-pager", "-p", "warning..alert",
+                "journalctl",
+                "-u",
+                "cups.service",
+                "--since",
+                f"-{minutes} minutes",
+                "-n",
+                str(lines),
+                "--no-pager",
+                "-p",
+                "warning..alert",
             ],
             check=False,
         )
@@ -109,10 +127,65 @@ class CupsFilterService:
         if error_log.is_file() and os.access(error_log, os.R_OK):
             try:
                 recent = error_log.read_text(errors="replace").splitlines()[-lines:]
-                chunks.append("\n".join(line for line in recent if re.search(r"\bE\s|\[Job \d+\].*(failed|error)", line, re.I)))
+                chunks.append(
+                    "\n".join(
+                        line
+                        for line in recent
+                        if re.search(r"\bE\s|\[Job \d+\].*(failed|error)", line, re.IGNORECASE)
+                        and self._line_is_recent(line, minutes)
+                    )
+                )
             except OSError:
                 pass
-        return "\n".join(item for item in chunks if item)
+        return redact_text("\n".join(item for item in chunks if item))
+
+    @staticmethod
+    def _line_is_recent(line: str, minutes: int) -> bool:
+        """Evita que um erro antigo na cauda do ``error_log`` pareça atual."""
+
+        match = re.search(
+            r"\[(\d{2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2}) ([+-]\d{4})\]",
+            line,
+        )
+        if not match:
+            return False
+        day, month_name, year, hour, minute, second, offset = match.groups()
+        months = {
+            "jan": 1,
+            "feb": 2,
+            "mar": 3,
+            "apr": 4,
+            "may": 5,
+            "jun": 6,
+            "jul": 7,
+            "aug": 8,
+            "sep": 9,
+            "oct": 10,
+            "nov": 11,
+            "dec": 12,
+        }
+        month = months.get(month_name.lower())
+        if month is None:
+            return False
+        sign = 1 if offset[0] == "+" else -1
+        utc_offset = timedelta(
+            hours=sign * int(offset[1:3]),
+            minutes=sign * int(offset[3:5]),
+        )
+        try:
+            timestamp = datetime(
+                int(year),
+                month,
+                int(day),
+                int(hour),
+                int(minute),
+                int(second),
+                tzinfo=timezone(utc_offset),
+            )
+        except ValueError:
+            return False
+        age = datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)
+        return timedelta(0) <= age <= timedelta(minutes=max(1, minutes))
 
     def diagnose(self) -> list[FilterFinding]:
         findings = self.analyze_text(self.read_recent_errors())

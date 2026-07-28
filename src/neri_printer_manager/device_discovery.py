@@ -4,14 +4,16 @@ Combina filas instaladas, backends do CUPS, anúncios Avahi/IPP e, como fallback
 uma varredura limitada da sub-rede local. A varredura testa apenas portas de
 impressão conhecidas e limita-se a redes pequenas para não sobrecarregar o ambiente.
 """
+
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
 import ipaddress
 import re
 import socket
-from urllib.parse import unquote, urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, replace
+from typing import ClassVar
+from urllib.parse import quote, unquote, urlparse
 
 from .core import CommandRunner, CupsService
 
@@ -32,10 +34,22 @@ class RichDiscoveryService:
     """Descobre impressoras sem confundir anúncio remoto com fila instalada."""
 
     SERVICE_TYPES = ("_ipp._tcp", "_ipps._tcp", "_printer._tcp")
-    PRINTER_PORTS = {
+    PRINTER_PORTS: ClassVar[dict[int, tuple[str, str, str]]] = {
         631: ("IPP", "ipp", "/ipp/print"),
         9100: ("JetDirect", "socket", ""),
         515: ("LPD", "lpd", "/lp"),
+    }
+    DISCOVERABLE_SCHEMES: ClassVar[set[str]] = {
+        "dnssd",
+        "hp",
+        "http",
+        "https",
+        "ipp",
+        "ipps",
+        "lpd",
+        "smb",
+        "socket",
+        "usb",
     }
 
     def __init__(self, runner: CommandRunner | None = None) -> None:
@@ -48,14 +62,25 @@ class RichDiscoveryService:
         return (text or fallback)[:limit]
 
     def discover(self) -> list[DiscoveredPrinter]:
-        installed = CupsService(self.runner).list_printers()
+        installed = CupsService(self.runner).list_printers(include_automatic=True)
         by_uri: dict[str, DiscoveredPrinter] = {}
-        queue_by_uri = {item.device_uri: item.name for item in installed if item.device_uri}
+        queue_by_uri = {
+            item.device_uri: item.name
+            for item in installed
+            if item.device_uri and not item.automatic
+        }
 
         for printer in installed:
             uri = printer.device_uri or ""
             host, address = self._host_address(uri)
             name = self._safe_text(printer.name, "Fila instalada", 127)
+            installed_queue = "" if printer.automatic else name
+            location = (
+                "Publicada automaticamente por outro computador; não é tratada como "
+                "uma instalação local"
+                if printer.automatic
+                else f"Instalada neste computador como fila '{name}'"
+            )
             by_uri[uri or f"queue:{name}"] = DiscoveredPrinter(
                 name=name,
                 model=self._safe_text(self._friendly_name(uri), name),
@@ -63,8 +88,8 @@ class RichDiscoveryService:
                 address=self._safe_text(address, "Local"),
                 protocol=self._safe_text(self._protocol(uri), "LOCAL", 32),
                 uri=uri,
-                location=f"Instalada neste computador como fila '{name}'",
-                installed_queue=name,
+                location=location,
+                installed_queue=installed_queue,
             )
 
         self._merge_lpinfo(by_uri, queue_by_uri)
@@ -86,7 +111,7 @@ class RichDiscoveryService:
 
         # Muitas redes corporativas não anunciam impressoras por mDNS. Nesse caso,
         # procura equipamentos nas portas padrão da sub-rede local.
-        if not any(not item.installed_queue for item in by_uri.values()):
+        if not any(self._is_remote_candidate(item) for item in by_uri.values()):
             for item in self._scan_local_subnets():
                 by_uri.setdefault(item.uri, item)
 
@@ -95,7 +120,19 @@ class RichDiscoveryService:
             key=lambda item: (not bool(item.installed_queue), item.name.lower(), item.host.lower()),
         )
 
-    def _merge_lpinfo(self, by_uri: dict[str, DiscoveredPrinter], queue_by_uri: dict[str, str]) -> None:
+    @staticmethod
+    def _is_remote_candidate(item: DiscoveredPrinter) -> bool:
+        if item.installed_queue:
+            return False
+        try:
+            scheme = urlparse(item.uri).scheme.lower()
+        except ValueError:
+            return False
+        return scheme not in {"", "hp", "usb"}
+
+    def _merge_lpinfo(
+        self, by_uri: dict[str, DiscoveredPrinter], queue_by_uri: dict[str, str]
+    ) -> None:
         if not self.runner.exists("lpinfo"):
             return
         result = self.runner.run(["lpinfo", "-v"], check=False)
@@ -104,7 +141,18 @@ class RichDiscoveryService:
             if len(parts) != 2:
                 continue
             backend, uri = parts[0].strip(), parts[1].strip()
-            if not uri or len(uri) > 2048 or uri in by_uri:
+            try:
+                scheme = urlparse(uri).scheme.lower()
+            except ValueError:
+                continue
+            real_device = "://" in uri or (scheme == "hp" and uri.lower().startswith("hp:/usb/"))
+            if (
+                not uri
+                or len(uri) > 2048
+                or uri in by_uri
+                or scheme not in self.DISCOVERABLE_SCHEMES
+                or not real_device
+            ):
                 continue
             host, address = self._host_address(uri)
             queue = queue_by_uri.get(uri, "")
@@ -118,7 +166,8 @@ class RichDiscoveryService:
                 uri=uri,
                 location=(
                     f"Instalada neste computador como fila '{queue}'"
-                    if queue else self._remote_location(host, address)
+                    if queue
+                    else self._remote_location(host, address)
                 ),
                 installed_queue=queue,
             )
@@ -151,18 +200,19 @@ class RichDiscoveryService:
         for line in result.stdout.splitlines():
             token = line.split(maxsplit=1)[0] if line.strip() else ""
             try:
-                network = ipaddress.ip_network(token, strict=False)
+                candidate = ipaddress.ip_network(token, strict=False)
             except ValueError:
                 continue
-            if not isinstance(network, ipaddress.IPv4Network) or network.is_loopback:
+            if not isinstance(candidate, ipaddress.IPv4Network) or candidate.is_loopback:
                 continue
+            network: ipaddress.IPv4Network = candidate
             # Evita varreduras grandes. Em redes maiores, examina somente o /24
             # correspondente ao endereço local indicado pela rota.
             if network.num_addresses > 256:
                 src = re.search(r"\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
                 if not src:
                     continue
-                network = ipaddress.ip_network(f"{src.group(1)}/24", strict=False)
+                network = ipaddress.IPv4Network(f"{src.group(1)}/24", strict=False)
             if network not in networks:
                 networks.append(network)
         return networks[:2]
@@ -174,7 +224,9 @@ class RichDiscoveryService:
             return []
         found: list[DiscoveredPrinter] = []
         with ThreadPoolExecutor(max_workers=48) as pool:
-            futures = {pool.submit(self._probe_host, address): address for address in addresses[:510]}
+            futures = {
+                pool.submit(self._probe_host, address): address for address in addresses[:510]
+            }
             for future in as_completed(futures):
                 try:
                     found.extend(future.result())
@@ -235,45 +287,95 @@ class RichDiscoveryService:
     def _parse_avahi_line(self, raw: str) -> DiscoveredPrinter | None:
         if not raw.startswith("="):
             return None
-        fields = raw.split(";")
+        fields = self._split_avahi_fields(raw)
         if len(fields) < 9:
             return None
         service_name = self._safe_text(unquote(fields[3]), "Impressora anunciada")
         service_type = fields[4].strip()
-        host = self._safe_text(fields[6].rstrip("."), "Host não informado")
-        address = self._safe_text(fields[7], "IP não informado", 64)
-        port = fields[8].strip()
-        if not port.isdigit():
+        if service_type not in self.SERVICE_TYPES:
             return None
-        attrs = self._txt_attributes(";".join(fields[9:]))
+        host = self._safe_text(fields[6].rstrip("."), "Host não informado")
+        raw_address = fields[7].strip()
+        try:
+            parsed_address = ipaddress.ip_address(raw_address)
+        except ValueError:
+            return None
+        address = str(parsed_address)
+        port = fields[8].strip()
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            return None
+        attrs = self._txt_attributes(fields[9:])
         model = self._safe_text(
             attrs.get("ty") or attrs.get("product", "").strip("()") or service_name,
             "Modelo não informado",
         )
         note = self._safe_text(attrs.get("note") or attrs.get("location"), "", 180)
         resource = self._safe_text(attrs.get("rp"), "ipp/print", 180).lstrip("/")
+        resource = quote(resource, safe="/:@-._~!$&'()*+,;=")
         scheme = "ipps" if service_type == "_ipps._tcp" else "ipp"
         if service_type == "_printer._tcp":
             scheme = "lpd"
             resource = self._safe_text(attrs.get("rp"), "lp", 180).lstrip("/")
-        uri = f"{scheme}://{address}:{port}/{resource}"
+            resource = quote(resource, safe="/:@-._~!$&'()*+,;=")
+        if isinstance(parsed_address, ipaddress.IPv6Address):
+            uri_address = (
+                host
+                if parsed_address.is_link_local and self._valid_dns_host(host)
+                else f"[{address}]"
+            )
+        else:
+            uri_address = address
+        uri = f"{scheme}://{uri_address}:{port}/{resource}"
         location = f"{note} — publicado por {host}" if note else f"Publicado por {host} ({address})"
         return DiscoveredPrinter(service_name, model, host, address, scheme.upper(), uri, location)
 
     @staticmethod
-    def _txt_attributes(text: str) -> dict[str, str]:
-        return {
-            key.lower(): unquote(value).strip()
-            for key, value in re.findall(r'"?([A-Za-z0-9_-]+)=([^";]*)"?', text)
-        }
+    def _split_avahi_fields(raw: str) -> list[str]:
+        r"""Separa a saída parsável do Avahi respeitando ``\;`` e ``\\``."""
+
+        fields: list[str] = []
+        current: list[str] = []
+        escaped = False
+        for character in raw:
+            if escaped:
+                current.append(character)
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == ";":
+                fields.append("".join(current))
+                current = []
+            else:
+                current.append(character)
+        if escaped:
+            current.append("\\")
+        fields.append("".join(current))
+        return fields
+
+    @staticmethod
+    def _txt_attributes(fields: list[str]) -> dict[str, str]:
+        attributes: dict[str, str] = {}
+        for raw in fields:
+            token = raw.strip().strip('"')
+            key, separator, value = token.partition("=")
+            if separator and re.fullmatch(r"[A-Za-z0-9_-]+", key):
+                attributes[key.lower()] = unquote(value).strip()
+        return attributes
 
     @staticmethod
     def _protocol(uri: str, fallback: str = "") -> str:
-        return urlparse(uri).scheme.upper() or fallback.upper() or "DESCONHECIDO"
+        try:
+            scheme = urlparse(uri).scheme.upper()
+        except ValueError:
+            scheme = ""
+        return scheme or fallback.upper() or "DESCONHECIDO"
 
     @staticmethod
     def _friendly_name(uri: str) -> str:
-        parsed = urlparse(uri)
+        try:
+            parsed = urlparse(uri)
+        except ValueError:
+            return ""
         if parsed.scheme == "usb":
             return unquote((parsed.netloc + parsed.path).strip("/")).replace("_", " ")
         path = unquote(parsed.path.strip("/"))
@@ -283,15 +385,41 @@ class RichDiscoveryService:
 
     @staticmethod
     def _host_address(uri: str) -> tuple[str, str]:
-        parsed = urlparse(uri)
-        host = parsed.hostname or ""
+        try:
+            parsed = urlparse(uri)
+            host = parsed.hostname or ""
+        except (UnicodeError, ValueError):
+            return "", ""
         if not host:
             return ("Este computador" if parsed.scheme == "usb" else "", "")
         try:
+            ipaddress.ip_address(host)
+            return host, host
+        except ValueError:
+            pass
+        if parsed.scheme.lower() in {
+            "dnssd",
+            "implicitclass",
+        } or not RichDiscoveryService._valid_dns_host(host):
+            return host[:240], ""
+        try:
             address = socket.gethostbyname(host)
-        except OSError:
-            address = host if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host) else ""
+        except (OSError, UnicodeError, ValueError):
+            address = ""
         return host, address
+
+    @staticmethod
+    def _valid_dns_host(host: str) -> bool:
+        if not host or len(host) > 253 or " " in host:
+            return False
+        labels = host.rstrip(".").split(".")
+        if any(not label or len(label.encode("utf-8", errors="ignore")) > 63 for label in labels):
+            return False
+        try:
+            host.encode("idna")
+        except UnicodeError:
+            return False
+        return True
 
     @staticmethod
     def _remote_location(host: str, address: str) -> str:

@@ -1,3 +1,5 @@
+import pytest
+
 from neri_printer_manager.core import CommandResult, PrinterManagerError
 from neri_printer_manager.host_locator import LocatedPrinter
 from neri_printer_manager.smart_install import DriverCatalog, SmartPrinterInstaller
@@ -7,7 +9,9 @@ class FakeCups:
     def __init__(self, succeed_model: str) -> None:
         self.succeed_model = succeed_model
         self.calls: list[tuple[str, str, str]] = []
+        self.auth_calls: list[tuple[str, str, str, str, str]] = []
         self.tested: list[str] = []
+        self.removed: list[str] = []
 
     def add_printer(self, name: str, uri: str, model: str = "everywhere") -> None:
         self.calls.append((name, uri, model))
@@ -15,7 +19,19 @@ class FakeCups:
             raise PrinterManagerError("modelo incompatível")
 
     def remove_printer(self, name: str) -> None:
-        return None
+        self.removed.append(name)
+
+    def add_authenticated_printer(
+        self,
+        name: str,
+        uri: str,
+        model: str,
+        username: str,
+        password: str,
+    ) -> None:
+        self.auth_calls.append((name, uri, model, username, password))
+        if model != self.succeed_model:
+            raise PrinterManagerError("modelo incompatível")
 
     def resume(self, name: str) -> None:
         return None
@@ -32,7 +48,9 @@ class FakeRunner:
         return CommandResult(tuple(args), 0, self.output, "")
 
 
-def item(protocol: str, uri: str, *, name: str = "Teste", username: str = "", password: str = "") -> LocatedPrinter:
+def item(
+    protocol: str, uri: str, *, name: str = "Teste", username: str = "", password: str = ""
+) -> LocatedPrinter:
     return LocatedPrinter(
         name=name,
         host="MAQ211",
@@ -87,7 +105,7 @@ def test_exact_driver_is_prioritized() -> None:
     assert cups.calls[0][2] == outcome.model
 
 
-def test_smb_credentials_are_encoded_in_installation_uri() -> None:
+def test_smb_credentials_use_the_dedicated_secure_flow() -> None:
     cups = FakeCups("drv:///sample.drv/generic.ppd")
     printer = item(
         "SMB",
@@ -96,6 +114,31 @@ def test_smb_credentials_are_encoded_in_installation_uri() -> None:
         password="senha com espaço",
     )
     SmartPrinterInstaller(cups, catalog=empty_catalog()).install("HP-RECEPCAO", printer)
-    installed_uri = cups.calls[0][1]
-    assert "DOMINIO%5Csame" in installed_uri
-    assert "senha%20com%20espa%C3%A7o" in installed_uri
+    assert not cups.calls
+    assert cups.auth_calls[-1][1] == "smb://192.168.1.65/HP-RECEPCAO"
+    assert cups.auth_calls[-1][3:] == ("DOMINIO\\same", "senha com espaço")
+    assert "senha" not in cups.auth_calls[-1][1]
+
+
+def test_failed_attempts_never_trigger_blind_queue_removal() -> None:
+    cups = FakeCups("modelo-que-nao-existe")
+    with pytest.raises(PrinterManagerError):
+        SmartPrinterInstaller(cups, catalog=empty_catalog()).install(
+            "FILA",
+            item("IPP", "ipp://192.168.1.65/ipp/print"),
+        )
+    assert cups.removed == []
+
+
+def test_queue_created_by_this_attempt_is_cleaned_after_verification_failure() -> None:
+    class VerificationFailure(FakeCups):
+        def verify_printer(self, _name: str) -> None:
+            raise PrinterManagerError("fila não apareceu")
+
+    cups = VerificationFailure("everywhere")
+    with pytest.raises(PrinterManagerError):
+        SmartPrinterInstaller(cups, catalog=empty_catalog()).install(
+            "FILA",
+            item("IPP", "ipp://192.168.1.65/ipp/print"),
+        )
+    assert cups.removed == ["FILA"]

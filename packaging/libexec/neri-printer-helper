@@ -1,73 +1,8 @@
-#!/usr/bin/python3
-"""Helper privilegiado com operações explicitamente permitidas."""
-from __future__ import annotations
-import os,re,subprocess,sys
-from pathlib import Path
-from urllib.parse import urlparse
-QUEUE_RE=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,126}$")
-ALLOWED_SCHEMES={"ipp","ipps","http","https","socket","lpd","smb","usb"}
-ALLOWED_PACKAGES={"cups","cups-client","cups-browsed","cups-filters","ghostscript","avahi-daemon","avahi-utils","policykit-1","samba","smbclient","samba-common-bin","printer-driver-gutenprint","printer-driver-hpcups","foomatic-db-compressed-ppds","hplip","python3-pytest"}
-ALLOWED_SERVICES={"cups.service","avahi-daemon.service","smbd.service"}
-CUPS_EXEC_DIRS=(Path('/usr/lib/cups/filter'),Path('/usr/lib/cups/backend'))
-def fail(m,c=2): print(m,file=sys.stderr); return c
-def queue(v):
-    if not QUEUE_RE.fullmatch(v): raise ValueError('nome de fila inválido')
-    return v
-def uri(v):
-    p=urlparse(v)
-    if p.scheme not in ALLOWED_SCHEMES or (p.scheme!='usb' and not p.netloc): raise ValueError('URI inválida')
-    return v
-def execute(c): return subprocess.run(c,check=False).returncode
-def packages(v):
-    n=sorted(set(v))
-    if not n or any(x not in ALLOWED_PACKAGES for x in n): raise ValueError('pacote não autorizado')
-    return n
-def install_packages(v,reinstall=False):
-    if execute(['/usr/bin/apt-get','update']): return 1
-    c=['/usr/bin/apt-get','install','-y']+(['--reinstall'] if reinstall else [])+packages(v)
-    return execute(c)
-def fix_cups_permissions():
-    for d in CUPS_EXEC_DIRS:
-        if d.is_dir():
-            for e in d.iterdir():
-                if e.is_file() and not e.is_symlink(): e.chmod((e.stat().st_mode & 0o7777)|0o111)
-    return 0
-def enable_service(name):
-    if name not in ALLOWED_SERVICES: raise ValueError('serviço não autorizado')
-    return execute(['/usr/bin/systemctl','enable','--now',name])
-def clear_jobs():
-    return execute(['/usr/bin/cancel','-a'])
-def enable_printer_sharing(name):
-    name=queue(name)
-    for c in (["/usr/sbin/lpadmin","-p",name,"-o","printer-is-shared=true"],["/usr/sbin/cupsctl","--share-printers","--remote-any"],["/usr/bin/systemctl","enable","--now","cups.service"]):
-        r=execute(c)
-        if r:return r
-    smb=Path('/etc/samba/smb.conf')
-    if smb.exists():
-        text=smb.read_text(encoding='utf-8',errors='replace')
-        if '[printers]' not in text:
-            text += '\n[printers]\n   comment = Impressoras compartilhadas\n   path = /var/spool/samba\n   printable = yes\n   browseable = yes\n   guest ok = no\n   read only = yes\n   create mask = 0700\n'
-            smb.write_text(text,encoding='utf-8')
-        Path('/var/spool/samba').mkdir(parents=True,exist_ok=True); os.chmod('/var/spool/samba',0o1777)
-        execute(['/usr/bin/systemctl','restart','smbd.service'])
-    return 0
-def main(argv):
-    if os.geteuid()!=0:return fail('execute via pkexec')
-    if len(argv)<2:return fail('ação não informada')
-    a,*x=argv[1:]
-    try:
-        if a=='add' and len(x)==3:return execute(['/usr/sbin/lpadmin','-p',queue(x[0]),'-E','-v',uri(x[1]),'-m',x[2]])
-        if a=='remove' and len(x)==1:return execute(['/usr/sbin/lpadmin','-x',queue(x[0])])
-        if a=='pause' and len(x)==1:return execute(['/usr/sbin/cupsdisable',queue(x[0])])
-        if a=='resume' and len(x)==1:return execute(['/usr/sbin/cupsenable',queue(x[0])]) or execute(['/usr/sbin/cupsaccept',queue(x[0])])
-        if a=='install-packages' and x:return install_packages(x)
-        if a=='reinstall-packages' and x:return install_packages(x,True)
-        if a=='restart-cups' and not x:return execute(['/usr/bin/systemctl','restart','cups.service'])
-        if a=='enable-cups' and not x:return enable_service('cups.service')
-        if a=='enable-service' and len(x)==1:return enable_service(x[0])
-        if a=='clear-jobs' and not x:return clear_jobs()
-        if a=='fix-cups-permissions' and not x:return fix_cups_permissions()
-        if a=='enable-printer-sharing' and len(x)==1:return enable_printer_sharing(x[0])
-    except (OSError,ValueError) as e:return fail(str(e))
-    return fail('ação ou argumentos não permitidos')
-if __name__=='__main__': raise SystemExit(main(sys.argv))
+#!/opt/neri-printer-manager/venv/bin/python
+"""Entrada PolicyKit do Neri Printer Manager."""
+
+from neri_printer_manager.privileged import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

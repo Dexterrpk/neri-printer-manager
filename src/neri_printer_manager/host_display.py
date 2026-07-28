@@ -4,13 +4,15 @@ A resolução é complementar: falhas de DNS/NetBIOS nunca podem interromper a
 listagem de impressoras. Consultas NetBIOS usam timeout curto, cache e execução
 concorrente para não bloquear a interface em redes com muitos dispositivos.
 """
+
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import re
 import socket
-from typing import Iterable
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
+from typing import ClassVar
 
 from .core import CommandRunner, PrinterManagerError
 
@@ -18,7 +20,7 @@ from .core import CommandRunner, PrinterManagerError
 class HostDisplayResolver:
     """Tenta DNS reverso e NetBIOS sem repetir o próprio IP como hostname."""
 
-    UNKNOWN_HOSTS = {
+    UNKNOWN_HOSTS: ClassVar[set[str]] = {
         "host não informado",
         "origem não identificada",
         "este computador",

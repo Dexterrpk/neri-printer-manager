@@ -15,6 +15,13 @@ for command in python3 lpstat lpinfo lpadmin lp cupsctl systemctl pkexec journal
   check_command "$command"
 done
 
+if /usr/bin/python3 -c 'import cups' >/dev/null 2>&1; then
+  echo '[OK] API Python do CUPS disponível'
+else
+  echo '[ERRO] python3-cups ausente ou incompatível'
+  failures=$((failures + 1))
+fi
+
 if systemctl is-active --quiet cups.service; then
   echo '[OK] cups.service ativo'
 else

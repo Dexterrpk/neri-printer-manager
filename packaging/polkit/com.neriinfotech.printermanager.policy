@@ -6,14 +6,14 @@
   <vendor>Neri InfoTech</vendor>
   <vendor_url>https://github.com/Dexterrpk/neri-printer-manager</vendor_url>
   <action id="com.neriinfotech.printermanager.admin">
-    <description>Administrar impressoras locais</description>
-    <message>Autenticação necessária para alterar impressoras</message>
+    <description>Administrar impressoras e compartilhamentos locais</description>
+    <message>Autorização administrativa necessária para alterar a impressão</message>
+    <icon_name>printer</icon_name>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/neri-printer-helper</annotate>
-    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 </policyconfig>

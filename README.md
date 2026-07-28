@@ -1,7 +1,7 @@
 # Neri Printer Manager
 
 Gerenciador de impressoras para Linux Mint com descoberta, instalação,
-compartilhamento e diagnóstico em uma interface PySide6. A versão atual é **2.0.0**.
+compartilhamento e diagnóstico em uma interface PySide6. A versão atual é **2.0.1**.
 
 O aplicativo cobre impressoras USB, equipamentos de rede/RJ45 e filas publicadas
 por Linux Mint ou Windows. A interface roda como usuário comum; somente as ações
@@ -33,6 +33,7 @@ Se você baixou o pacote Debian, abra o terminal na pasta onde ele foi salvo e
 execute:
 
 ```bash
+sudo apt update
 sudo apt install ./neri-printer.deb
 ```
 

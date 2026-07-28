@@ -1,8 +1,3 @@
-#!/opt/neri-printer-manager/venv/bin/python
-"""Entrada PolicyKit do Neri Printer Manager."""
-
-from neri_printer_manager.privileged import main
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+#!/bin/sh
+export PYTHONPATH="/opt/neri-printer-manager/lib"
+exec /usr/bin/python3 -m neri_printer_manager.privileged "$@"

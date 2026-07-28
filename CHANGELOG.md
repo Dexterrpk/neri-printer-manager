@@ -2,6 +2,16 @@
 
 Este projeto segue versionamento semântico.
 
+## 2.0.1 — 2026-07-28
+
+### Corrigido
+
+- Instalação no Linux Mint 21 e 22 com dependência GLib compatível com as duas
+  bases Ubuntu.
+- O pacote passa a trazer a aplicação Python pronta, sem criar ambiente virtual
+  nem executar `pip` durante o `apt install`.
+- O helper PolicyKit e os lançadores usam diretamente o runtime empacotado.
+
 ## 2.0.0 — 2026-07-21
 
 ### Adicionado

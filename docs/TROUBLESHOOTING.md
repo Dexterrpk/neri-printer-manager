@@ -1,73 +1,135 @@
 # Solução de problemas
 
-## O programa não localiza a impressora
+Guia rápido do **Neri Printer Manager**, criado por **Cleiton Neri — Neri Infotech**.
 
-- Confirme energia, cabo e a mesma rede/VLAN.
-- Teste primeiro o IP para separar falha de DNS/NetBIOS.
-- Em outro Mint, confirme que a fila foi marcada como compartilhada.
-- Em Windows, confirme **Compartilhamento de Arquivos e Impressoras** e as portas
-  139/445 no perfil de rede privado.
-- Execute **Corrigir problemas → Fazer diagnóstico completo**.
+## Execução rápida
 
-## A porta 631 responde, mas aparece uma fila incorreta
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/run.sh | bash
+```
 
-Um computador com CUPS não é necessariamente uma impressora direta. A versão 2.0
-enumera as filas remotas; se nenhuma for publicada, ela oferece `/ipp/print`
-somente como tentativa para um equipamento IPP direto.
+## CUPS não inicia
 
-## Há impressoras que eu nunca instalei
+Primeiro valide:
+
+```bash
+sudo cupsd -t
+```
+
+Se houver erro de configuração, não reinicie o serviço antes de corrigir ou restaurar o arquivo afetado.
+
+Um caso real já encontrado foi:
+
+```text
+Missing integer value for MaxJobs
+```
+
+Isso significa que a diretiva `MaxJobs` estava sem valor inteiro válido.
+
+## Impressora instala, mas o trabalho fica parado
+
+Não trate "retido" como diagnóstico final. Verifique, nesta ordem:
+
+- fila habilitada;
+- fila aceitando trabalhos;
+- permissão do usuário;
+- filtros;
+- backend;
+- comunicação USB/rede;
+- log do job.
+
+## `client-error-not-authorized`
+
+A fila ou política do CUPS está recusando a operação. Corrija somente a fila afetada e teste novamente.
+
+## `Backend hp returned status 1 (failed)`
+
+O trabalho chegou ao CUPS, mas o backend HPLIP falhou ao enviar os dados para a impressora.
 
 Verifique:
 
-```bash
-lpstat -v
-systemctl status cups-browsed.service
-```
+- HPLIP;
+- `printer-driver-hpcups`;
+- backend `/usr/lib/cups/backend/hp`;
+- `hp-probe`;
+- `hp-plugin`, quando o modelo exigir;
+- URI `hp:/usb/...`.
 
-URIs `implicitclass://` são filas automáticas publicadas na rede. O Neri Printer
-Manager as separa das filas locais. O instalador não adiciona `cups-browsed`, mas
-não desativa uma escolha anterior do administrador.
+Esse erro não deve ser confundido com falha de `pdftopdf` quando o filtro terminou sem erro.
 
-## IPP Everywhere falhou
+## `filter failed`
 
-Alguns equipamentos abrem a porta 631 sem implementar todos os atributos
-driverless. Instale os drivers do fabricante/HPLIP e tente novamente. O aplicativo
-também testa PCL/PostScript e, se abertas, as portas 9100/515.
+Verifique o log do job para identificar qual filtro falhou. Não aplique permissões globais em todos os filtros sem evidência.
 
-## SMB pede senha ou retorna acesso negado
+Possíveis componentes envolvidos:
 
-- Tente `DOMINIO\\usuario` ou `PC\\usuario`.
-- Confirme que o compartilhamento é do tipo impressora, não uma pasta.
-- Em Mint→Windows, configure a senha Samba na tela **Compartilhamento**.
-- Senha Samba e senha de login podem ser diferentes.
-- Não coloque a senha diretamente na URI ou no terminal.
+- `cups-filters`;
+- Ghostscript;
+- Foomatic;
+- filtros específicos do fabricante;
+- PPD.
 
-## PolicyKit não abre ou a operação é recusada
+## `PrintSpy: A URI do dispositivo é inválida`
+
+Verifique se a fila está usando o backend esperado. Uma fila `hp:/usb/...` não deve ser convertida automaticamente para `printspy:`.
+
+O PrintSpy deve ser tratado como backend específico, não como substituto universal dos demais.
+
+## Impressora aparece como `inativa; habilitada`
+
+Normalmente significa que está ociosa (`idle`). Não é, isoladamente, um erro.
+
+## Existem duas impressoras do mesmo modelo
+
+Compare o serial USB antes de remover qualquer fila. Duas HP P1102w, por exemplo, podem ser equipamentos físicos diferentes mesmo que os nomes das filas sejam parecidos.
+
+## Surgiram filas estranhas como `or` ou `pdftopdf`
+
+Isso é sinal de parsing incorreto da saída do CUPS, não de impressoras reais.
+
+O código atual usa locale previsível e parser restrito a linhas reais de impressora para evitar esse tipo de erro.
+
+## Impressora USB não aparece
 
 Confira:
 
 ```bash
-command -v pkexec
-ls -l /usr/libexec/neri-printer-helper
-ls -l /usr/share/polkit-1/actions/com.neriinfotech.printermanager.policy
+lsusb
+lpinfo -v
 ```
 
-Execute novamente o instalador se helper ou política estiverem ausentes. Um
-usuário comum precisa informar uma conta administrativa válida na janela.
+Se a fila aponta para um serial específico, confirme que o mesmo serial aparece no dispositivo detectado.
 
-## Obter informações de suporte
+## Impressora de rede não responde
+
+Teste apenas o destino conhecido. Exemplos de portas normais de impressão:
+
+- IPP: 631;
+- JetDirect: 9100;
+- LPD: 515;
+- SMB: 445.
+
+O Neri Printer Manager não deve escanear agressivamente a rede para resolver esse problema.
+
+## Antes de reiniciar o CUPS
+
+Sempre que houver alteração em configuração global:
 
 ```bash
-neri-printer-cli health
-neri-printer-cli list --all
-neri-printer-cli support-bundle "$HOME"
+sudo cupsd -t
 ```
 
-Revise o ZIP antes de compartilhar. O gerador remove credenciais conhecidas, mas
-nomes de host, usuário da fila e topologia da rede ainda podem ser sensíveis.
+Somente reinicie se a validação passar.
 
-Log da instalação:
+## Logs úteis
 
 ```bash
-sudo tail -n 200 /var/log/neri-printer-manager-install.log
+sudo tail -n 100 /var/log/cups/error_log
+journalctl -u cups.service -n 100 --no-pager
 ```
+
+Prefira relacionar mensagens ao ID do trabalho recente para evitar diagnosticar erro antigo como atual.
+
+## Se o modo portátil fechar
+
+Os arquivos temporários do programa são removidos. As correções que você autorizou no sistema de impressão permanecem.

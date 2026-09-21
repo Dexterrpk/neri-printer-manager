@@ -1,46 +1,114 @@
-# Política e modelo de segurança
+# Segurança
 
-## Versões suportadas
+O Neri Printer Manager foi criado por **Cleiton Neri — Neri Infotech** para resolver problemas de impressão sem transformar a ferramenta em um administrador de infraestrutura.
 
-Correções de segurança são aplicadas à linha 2.x. Versões anteriores devem ser
-atualizadas antes de uma investigação.
+## Princípio principal
 
-## Fronteira de privilégio
+O sistema pode diagnosticar e corrigir impressão no host local e na impressora selecionada.
 
-A interface e a CLI rodam como usuário comum. O executável
-`/usr/libexec/neri-printer-helper` é o único componente elevado pelo PolicyKit.
-Ele rejeita execução direta sem UID efetivo 0, valida novamente todos os valores e
-aceita apenas operações enumeradas no código.
+Ele **não deve administrar a rede do ambiente**.
 
-O helper não aceita comandos livres, caminhos de executável vindos do usuário,
-pacotes fora do catálogo ou unidades `systemd` arbitrárias. Todos os subprocessos
-usam caminhos absolutos e ambiente reduzido.
+## Ações fora do escopo
+
+O projeto não deve alterar automaticamente:
+
+- Zentyal;
+- firewall, `iptables`, `nftables` ou UFW;
+- DNS;
+- DHCP;
+- gateway;
+- rotas;
+- VLAN;
+- NetworkManager;
+- netplan;
+- interfaces de rede;
+- roteadores, switches ou outros servidores;
+- computadores remotos.
+
+Também não deve executar:
+
+- brute force;
+- tentativa automática de senha;
+- enumeração agressiva;
+- varredura ampla desnecessária;
+- comandos remotos via SSH, WinRM, RPC ou equivalentes.
+
+## Modo portátil
+
+A forma recomendada de uso é:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/run.sh | bash
+```
+
+O lançador baixa uma revisão portátil fixa, executa em arquivo temporário e remove esse arquivo ao terminar.
+
+O código portátil trabalha com `umask 077`, usa locale previsível e limita URIs aos esquemas de impressão conhecidos.
+
+## Alterações no CUPS
+
+Antes de mudanças relevantes, o programa deve criar backup temporário dos arquivos afetados.
+
+Após alteração em configuração global, deve executar:
+
+```bash
+cupsd -t
+```
+
+Se a validação falhar:
+
+1. não reiniciar o CUPS com a configuração inválida;
+2. restaurar o backup quando possível;
+3. informar o erro ao técnico.
+
+## Menor impacto possível
+
+Uma falha em uma impressora não deve provocar alterações em todas as filas.
+
+Exemplos:
+
+- fila pausada → retomar somente aquela fila;
+- permissão negada → corrigir somente a fila afetada;
+- backend HP falhando → tratar HPLIP/HPCUPS;
+- erro de Ghostscript → tratar Ghostscript somente quando confirmado;
+- trabalho preso → cancelar o job selecionado, não todos por padrão.
+
+## Rede
+
+Quando o equipamento selecionado usa IP, o programa pode testar somente o destino necessário, por exemplo nas portas 631, 9100, 515 ou 445 conforme o protocolo.
+
+Esse teste não autoriza escanear toda a rede nem alterar firewall ou roteamento.
 
 ## Credenciais
 
-- Senhas SMB não são opções de linha de comando. O helper usa a API Python do
-  CUPS para transmitir a URI no pedido IPP local, sem criar um `lpadmin` com senha.
-- A descoberta usa um arquivo temporário de modo `0600`, apagado em bloco `finally`.
-- Logs, mensagens, relatórios e bundles passam por higienização recursiva.
-- O CUPS pode persistir a URI necessária ao backend SMB em seu arquivo de
-  configuração protegido pelo sistema. O backup que inclui esse arquivo é criado
-  com modo `0600`; trate-o como material confidencial.
+Senhas e tokens não devem aparecer em logs ou argumentos de processos sempre que for possível evitá-los.
 
-## Rede e compartilhamento
+A linha instalada 2.x usa higienização de URIs, campos de senha e cabeçalhos de autorização e possui helper PolicyKit com operações enumeradas.
 
-O programa não abre portas de firewall automaticamente. O CUPS é publicado com
-as regras de rede local, e o Samba usa `guest ok = no`. Autorize portas no firewall
-somente para uma rede confiável.
+## Linha instalada 2.x
+
+A interface e a CLI rodam preferencialmente como usuário comum. Operações administrativas passam por um helper específico que não aceita comandos livres.
+
+Pacotes, serviços e ações privilegiadas devem permanecer em listas conhecidas e validadas.
 
 ## Relato de vulnerabilidade
 
-Não publique credenciais, logs integrais ou detalhes exploráveis em uma issue
-pública. Abra primeiro um contato privado com o mantenedor do repositório e inclua:
+Não publique credenciais, senhas, tokens, logs completos de produção ou informações sensíveis de topologia em issue pública.
 
-- versão afetada e distribuição;
-- cenário mínimo de reprodução;
-- impacto observado;
-- pacote de suporte somente depois de revisar seu conteúdo.
+Ao relatar uma falha, informe apenas o necessário para reproduzir o problema com segurança.
 
-Se não houver canal privado configurado no GitHub, abra uma issue sem detalhes
-sensíveis solicitando um meio de contato.
+## Regra de ouro
+
+```text
+diagnosticar
+→ corrigir minimamente
+→ validar
+→ testar
+```
+
+Nunca:
+
+```text
+problema desconhecido
+→ resetar tudo
+```

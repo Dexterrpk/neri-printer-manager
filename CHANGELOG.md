@@ -1,63 +1,57 @@
 # Histórico de mudanças
 
-Este projeto segue versionamento semântico.
+Projeto criado e mantido por **Cleiton Neri — Neri Infotech**.
 
-## 2.0.1 — 2026-07-28
-
-### Corrigido
-
-- Instalação no Linux Mint 21 e 22 com dependência GLib compatível com as duas
-  bases Ubuntu.
-- O pacote passa a trazer a aplicação Python pronta, sem criar ambiente virtual
-  nem executar `pip` durante o `apt install`.
-- O helper PolicyKit e os lançadores usam diretamente o runtime empacotado.
-- Ferramentas de desenvolvimento do PySide6 que não são usadas pelo aplicativo
-  deixaram de aumentar o tamanho do instalador.
-
-## 2.0.0 — 2026-07-21
+## 3.0.0-portable — 2026-09-20
 
 ### Adicionado
 
-- Interface única com sete áreas: início, rede, filas locais, trabalhos,
-  diagnóstico, compartilhamento e ferramentas.
-- Enumeração das filas reais de um CUPS remoto para o fluxo Mint→Mint.
-- Instalação SMB autenticada com senha por entrada padrão e API local do CUPS,
-  sem exposição em linhas de comando.
-- Definição de impressora padrão, compartilhamento/descompartilhamento por fila,
-  conta Samba, backup privilegiado e relatórios higienizados.
-- Detecção explícita de filas automáticas `implicitclass://`.
-- Testes de regressão de segurança, empacotamento Debian e CI Python 3.10/3.12.
+- edição portátil para Linux Mint, sem instalação permanente do aplicativo;
+- execução simples por `run.sh`;
+- lançador fixado em uma revisão portátil auditada;
+- limpeza automática dos arquivos temporários ao sair;
+- diagnóstico de CUPS, filas, permissões, URI, PPD, filtros, backends e comunicação;
+- identificação de falha HPLIP por `Backend hp returned status 1`;
+- tratamento de cenários de `client-error-not-authorized`, Ghostscript, filtros e trabalhos pendentes;
+- backup temporário e validação com `cupsd -t` antes de reinícios após mudanças relevantes;
+- rollback quando uma alteração de configuração não passa na validação;
+- documentação revisada com foco em uso real, segurança e autoria.
 
-### Alterado
+### Segurança
 
-- Todas as operações administrativas passaram a usar um único helper PolicyKit
-  com lista de permissões.
-- Colisões de nome agora interrompem a instalação em vez de substituir uma fila.
-- O compartilhamento do CUPS ficou limitado à rede local e agora desativa
-  explicitamente acesso irrestrito e administração remota.
-- `cups-browsed` deixou de ser dependência instalada automaticamente.
-- Instalador, bootstrap e `.deb` agora preservam atualizações anteriores e usam a
-  versão/arquitetura reais do projeto.
-- Pontos de entrada, assistente e serviços legados sem consumidores foram
-  removidos; `app.py` passou a ser a única interface gráfica.
+- modo portátil não administra Zentyal, firewall, DNS, DHCP, gateway, rotas, VLAN ou NetworkManager;
+- nenhuma rotina de brute force ou tentativa automática de senha;
+- testes de rede limitados ao destino selecionado e portas de impressão;
+- correções priorizam a menor alteração possível;
+- jobs e filas não relacionados não devem ser modificados sem confirmação.
 
 ### Corrigido
 
-- Divergência entre a versão do pacote e a versão exposta pelo aplicativo.
-- Leituras de widgets Qt a partir de *workers* e retenção desnecessária de senha
-  no campo da interface.
-- Falsos positivos causados por erros antigos no `error_log` do CUPS.
-- Dispositivos fictícios (`network ipp`, `network socket`) listados pelo backend
-  do CUPS e formatação de endereços IPv6 anunciados pelo Avahi.
-- Detecção de impressoras USB expostas pelo backend `hp:/usb/` do HPLIP.
-- Condição de corrida na troca de proprietário dos arquivos de backup.
-- Vazamento potencial de URI autenticada em logs e pacotes de suporte.
-- Operações administrativas sem tempo limite e atualização APT iniciada antes da
-  validação da lista de pacotes.
-- Rollback incompleto do instalador quando uma etapa posterior à troca de versão
-  falhava.
+- parsing de `lpstat` dependente do idioma;
+- possibilidade de textos como `or` e `pdftopdf` serem tratados como nomes de impressora em scripts auxiliares;
+- diagnóstico genérico de "retido" substituído por investigação baseada em fila, filtro, backend e log do trabalho.
+
+## 2.0.1 — 2026-07-28
+
+- compatibilidade de instalação com Linux Mint 21 e 22;
+- pacote passou a incluir a aplicação Python pronta;
+- helper PolicyKit e lançadores passaram a usar o runtime empacotado;
+- redução de dependências de desenvolvimento no pacote final.
+
+## 2.0.0 — 2026-07-21
+
+- interface PySide6 unificada;
+- descoberta de filas CUPS remotas;
+- instalação SMB autenticada sem senha em linha de comando;
+- definição de impressora padrão, compartilhamento por fila, backup e relatórios;
+- detecção de `implicitclass://`;
+- helper PolicyKit com ações enumeradas;
+- testes de segurança e CI;
+- correções em descoberta USB/HPLIP, logs, backup e validação administrativa.
 
 ## 1.5.0
 
-- Central de saúde unificada e correção verificável.
-- Descoberta enriquecida, instalação USB e suporte inicial a compartilhamento.
+- central de saúde;
+- descoberta enriquecida;
+- instalação USB;
+- suporte inicial a compartilhamento.

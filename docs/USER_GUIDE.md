@@ -1,101 +1,96 @@
-# Manual do usuário
+# Manual de uso
 
-## Antes de começar
+Este manual descreve o uso recomendado do **Neri Printer Manager Portable**, criado por **Cleiton Neri — Neri Infotech** para suporte rápido em Linux Mint.
 
-Use o Neri Printer Manager como usuário comum. Quando uma mudança administrativa
-for necessária, o PolicyKit pedirá a credencial de uma conta administradora.
-Mantenha a impressora ligada e, para rede, conectada ao mesmo segmento ou a uma
-rota permitida pelo firewall.
+## Executar
 
-## Tela inicial
+Abra o terminal como usuário normal e rode:
 
-Digite um IP ou hostname e clique em **Localizar automaticamente**. O aplicativo:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/run.sh | bash
+```
 
-1. resolve DNS, mDNS, `getent` ou NetBIOS;
-2. verifica apenas as portas conhecidas de impressão;
-3. enumera filas CUPS e SMB quando o host for um computador;
-4. ordena IPP, JetDirect, LPD e SMB por compatibilidade;
-5. testa driverless e depois os drivers locais mais aderentes.
+Não precisa instalar o aplicativo. O lançador baixa uma revisão portátil fixa, executa em `/tmp` e remove os arquivos temporários ao terminar.
 
-Uma fila existente nunca é substituída silenciosamente. Escolha outro nome ou
-remova a fila antiga conscientemente.
+## Fluxo recomendado
 
-![Busca de impressora na rede](screenshots/network.png)
+1. Escolha a impressora.
+2. Execute o diagnóstico.
+3. Leia o problema identificado e a evidência.
+4. Só aplique a correção quando o diagnóstico indicar uma ação segura.
+5. Envie uma página de teste.
+6. Confirme se o trabalho concluiu e se a folha saiu fisicamente.
 
-## Impressora de rede ou RJ45
+O programa foi pensado para corrigir o mínimo necessário, não para resetar todo o ambiente de impressão.
 
-1. Localize pelo IP/hostname.
-2. Selecione a opção marcada como recomendada.
-3. Escolha o nome local.
-4. Autorize a criação da fila.
-5. Confira a página de teste física.
+## O que é verificado
 
-IPP é priorizado. Se o equipamento anunciar IPP mas não implementar os atributos
-necessários, o instalador testa o driver exato, PostScript/PCL e transportes
-compatíveis sem alterar outra fila.
+O diagnóstico pode analisar:
 
-## Outro Linux Mint
+- serviço e configuração do CUPS;
+- estado da fila;
+- permissão para imprimir;
+- trabalhos pendentes;
+- URI da impressora;
+- PPD/driver;
+- filtros do CUPS;
+- Ghostscript;
+- backend `hp`, `usb`, `ipp`, `socket`, `lpd` ou `smb`;
+- HPLIP/HPCUPS;
+- presença de impressora USB e serial;
+- comunicação com o endereço específico de uma impressora de rede;
+- mensagens recentes do `error_log`.
 
-Informe o IP ou hostname do Mint remoto. Quando a porta 631 responder, o programa
-consulta os nomes reais publicados pelo CUPS remoto. Escolha a fila desejada; não
-é usado um caminho `/ipp/print` inventado para o computador inteiro.
+## Correção segura
 
-No Mint que compartilha, use **Compartilhamento**, selecione a fila local e clique
-em **Compartilhar fila**. A política padrão restringe o CUPS à rede local.
+Antes de alterações importantes, o programa cria backup temporário da configuração relevante. Quando `cupsd.conf` é alterado, a configuração precisa passar em:
 
-## Windows/SMB
+```bash
+cupsd -t
+```
 
-1. Informe o IP, hostname ou `\\SERVIDOR`.
-2. Preencha o usuário como `usuario`, `DOMINIO\\usuario` ou `PC\\usuario`.
-3. Digite a senha e pesquise.
-4. Selecione o compartilhamento com tipo **SMB** e instale.
+Se a validação falhar, o CUPS não deve ser reiniciado com a configuração quebrada. A rotina tenta restaurar o estado anterior.
 
-A senha some do campo assim que a pesquisa começa. Ela não é gravada no log nem
-vai como argumento do processo administrativo.
+## Impressora HP / HPLIP
 
-Para permitir que um Windows use uma impressora deste Mint:
+Se o trabalho entra na fila, passa pelos filtros e o log registra algo como:
 
-1. abra **Compartilhamento**;
-2. selecione e compartilhe uma fila;
-3. configure uma senha Samba para a conta local atual;
-4. no Windows, conecte usando o hostname/IP do Mint e essa conta;
-5. se necessário, autorize as portas 139/445 somente na rede local.
+```text
+Backend hp returned status 1 (failed)
+```
 
-![Compartilhamento de filas e conta Samba](screenshots/sharing.png)
+isso indica uma falha no backend HPLIP. O sistema deve tratar esse cenário como problema de backend/driver, e não simplesmente como "trabalho retido".
 
-## USB
+## Impressoras USB iguais
 
-Abra **Ferramentas técnicas → USB**, clique em **Procurar USB**, confira o modelo
-e instale. O modo `everywhere` não é forçado em USB; o driver específico ou um PPD
-genérico compatível é priorizado.
+Duas impressoras do mesmo modelo não são automaticamente duplicadas. Sempre que possível, o sistema usa o serial USB para distinguir os equipamentos.
 
-## Minhas impressoras e trabalhos
+## Rede
 
-Em **Minhas impressoras** é possível definir padrão, testar, pausar, retomar,
-compartilhar ou remover a fila local. A remoção não apaga configurações do
-equipamento remoto.
+O modo portátil não administra a rede do ambiente.
 
-Em **Fila de impressão**, selecione um trabalho para cancelá-lo. O cancelamento de
-todos os trabalhos só aparece como correção confirmada na central de saúde.
+Ele não altera firewall, DNS, DHCP, gateway, rota, VLAN, NetworkManager ou Zentyal. Quando uma impressora de rede precisa ser testada, a verificação é direcionada ao host daquela impressora e à porta de impressão correspondente.
 
-## Diagnóstico e correção
+## Fila de impressão
 
-**Corrigir automaticamente** executa apenas itens marcados como seguros, como
-ativar CUPS/Avahi ou reinstalar um componente obrigatório confirmado. Endereço,
-credencial e driver específico sempre exigem decisão humana.
+Evite apagar todos os trabalhos sem necessidade. O ideal é identificar e cancelar apenas o job problemático.
 
-Depois de cada correção, o diagnóstico é repetido. Uma mensagem sobre erro antigo
-do log pede uma nova página de teste em vez de alegar que o defeito atual persiste.
+## "Inativa" no `lpstat`
 
-## Relatório, suporte e backup
+Em muitos casos, uma impressora exibida como `inativa; habilitada` está apenas ociosa (`idle`). Isso não significa, por si só, que exista defeito.
 
-- **Relatório HTML:** estado atual em formato legível.
-- **Pacote de suporte ZIP:** relatórios e até 2.500 linhas recentes de cada log,
-  com credenciais removidas.
-- **Backup completo:** configuração CUPS, PPDs e Samba, quando presentes, mais
-  manifesto e SHA-256.
+## Quando o programa não consegue confirmar a solução
 
-O backup pode conter configuração protegida do CUPS. Guarde-o como um arquivo
-confidencial. A versão 2.0 cria backup, mas não restaura automaticamente: a
-restauração deve ser revisada por um administrador para não sobrescrever um
-servidor de impressão em produção.
+O programa deve diferenciar:
+
+- **Problema resolvido:** há evidência de que o trabalho passou corretamente pelo CUPS/backend;
+- **Correção aplicada, impressão não confirmada:** a parte lógica foi corrigida, mas é necessário validar a saída física.
+
+## Linha instalada 2.x
+
+A interface gráfica PySide6 e a CLI continuam no repositório para quem quiser uma instalação permanente. Para atendimento rápido em máquinas Linux Mint, prefira o modo portátil.
+
+## Autor
+
+**Cleiton Neri — Neri Infotech**  
+GitHub: `Dexterrpk`

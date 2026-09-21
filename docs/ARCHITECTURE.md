@@ -1,79 +1,161 @@
 # Arquitetura
 
-## Componentes
+O Neri Printer Manager mantém duas linhas complementares:
+
+1. **modo portátil**, recomendado para suporte rápido e sem instalação permanente;
+2. **aplicação instalada 2.x**, com interface PySide6, CLI e helper PolicyKit.
+
+Projeto criado e mantido por **Cleiton Neri — Neri Infotech**.
+
+## Modo portátil
+
+Fluxo principal:
 
 ```text
-PySide6 (app.py) / CLI (cli.py)
-            |
-            v
-serviços sem privilégio
-core, host_locator, device_discovery, smart_install,
-health, reports, sharing, backup
-            |
-            | operação administrativa enumerada + dados validados
-            v
-pkexec -> /usr/libexec/neri-printer-helper
-            |
-            v
-CUPS / systemd / APT / Samba / arquivos de backup
+run.sh
+  ↓
+baixa revisão portátil fixa
+  ↓
+/tmp/neri-printer-manager.*
+  ↓
+diagnóstico local
+  ↓
+correção específica, se confirmada
+  ↓
+validação + página de teste
+  ↓
+limpeza dos arquivos temporários
 ```
 
-A janela possui sete páginas, mas uma única classe `MainWindow`. `app.py` é o
-único ponto de entrada gráfico; a instalação guiada usa diretamente
-`HostPrinterLocator`, `RichDiscoveryService` e `SmartPrinterInstaller`.
+O lançador `run.sh` não executa a versão mutável da `main`. Ele aponta para uma revisão portátil fixa, permitindo que o uso em máquinas de produção permaneça previsível.
 
-## Concorrência da interface
+## Escopo de segurança
 
-Operações de rede e sistema são executadas por `QRunnable` no `QThreadPool`. Os
-valores dos widgets são capturados na thread da interface antes da criação do
-trabalho. O resultado volta por sinais Qt; workers não leem nem alteram widgets.
+O modo portátil trabalha no host local e na impressora selecionada. Ele não foi desenhado para administrar infraestrutura.
 
-## Descoberta e instalação
+Não deve alterar:
 
-`HostPrinterLocator` resolve o host, testa somente 631, 9100, 515, 445 e 139 e
-produz objetos `LocatedPrinter`. Na porta 631 ele consulta `lpstat -h host:631 -e`
-para diferenciar um servidor CUPS de uma impressora IPP direta.
+- Zentyal;
+- firewall;
+- DNS ou DHCP;
+- gateway ou roteamento;
+- VLAN;
+- NetworkManager;
+- interfaces de rede;
+- roteadores, switches ou hosts remotos.
 
-`SmartPrinterInstaller` ordena as tentativas, evita colisão de nome, cria a fila,
-retoma, verifica no CUPS e envia uma página de teste. Uma tentativa incompleta é
-removida antes da seguinte.
+Para equipamentos de rede, as sondagens são direcionadas somente ao destino selecionado e às portas normais de impressão.
 
-Filas com URI `implicitclass://` são anúncios efêmeros do `cups-browsed`. Elas
-podem ser mostradas na descoberta, mas não são contadas como instalações locais.
+## Motor de diagnóstico
 
-## PolicyKit e helper
+A sequência preferida é:
 
-A política autoriza somente o caminho fixo do helper. O helper aceita estas
-famílias de operação:
+```text
+CUPS
+ ↓
+configuração
+ ↓
+fila
+ ↓
+permissão
+ ↓
+job
+ ↓
+URI / dispositivo
+ ↓
+PPD / driver
+ ↓
+filtro
+ ↓
+backend
+ ↓
+comunicação
+```
 
-- criar/remover/pausar/retomar fila e cancelar trabalho;
-- instalar/reinstalar pacotes presentes no catálogo interno;
-- ativar CUPS, Avahi ou Samba e reiniciar CUPS;
-- reparar permissões somente de filtros/backends com cabeçalho executável válido;
-- compartilhar/descompartilhar uma fila e configurar a conta Samba atual;
-- criar backup em pasta permitida do usuário solicitante.
+O diagnóstico deve ser baseado em evidência. Um erro antigo no log não deve ser tratado como falha atual sem relação com um trabalho recente.
 
-Uma segunda validação ocorre dentro desse processo. Caminhos de comandos são
-absolutos, o ambiente é reduzido e o retorno é higienizado.
+## Motor de reparo
 
-## Credenciais SMB
+Cada correção é específica para a condição encontrada. A arquitetura evita o padrão "reinstalar tudo".
 
-Na descoberta, `smbclient` recebe um arquivo temporário `0600`. Na instalação, a
-senha passa por `stdin` do helper; somente dentro do processo privilegiado é
-montada a URI exigida pelo backend SMB. O helper usa `python3-cups` para enviá-la
-no pedido IPP local, sem argumento de subprocesso. A URI devolvida à interface não
-contém *userinfo*.
+Exemplos:
 
-## Diagnóstico
+- fila pausada → habilitar somente aquela fila;
+- permissão negada → corrigir somente a política da fila afetada;
+- `Backend hp returned status 1` → verificar/reparar HPLIP/HPCUPS;
+- Ghostscript com erro confirmado → reparar Ghostscript;
+- configuração CUPS inválida → backup, correção localizada e validação.
 
-Cada probe gera um `HealthCheck` independente. Exceções isoladas viram aviso e
-não interrompem os demais probes. `RepairService` traduz somente ações enumeradas
-e repete a verificação correspondente depois da mudança.
+## Proteção do CUPS
 
-## Empacotamento
+Alterações relevantes seguem a ideia de transação:
 
-O `.deb` inclui a aplicação e o PySide6 já instalados em um diretório privado.
-Nenhum ambiente virtual é criado e nenhum comando `pip` é executado na máquina do
-usuário durante a instalação. Por causa dos binários do PySide6, o pacote usa a
-arquitetura real da máquina de build, nunca `Architecture: all`. O Samba e drivers
-adicionais são recomendações; `cups-browsed` é apenas sugestão.
+```text
+estado atual
+ ↓
+backup
+ ↓
+alteração
+ ↓
+cupsd -t
+ ↓
+validou? ── não → rollback
+   │
+   sim
+   ↓
+reinício quando necessário
+ ↓
+teste
+```
+
+Isso evita reiniciar o serviço com um `cupsd.conf` quebrado.
+
+## Parsing previsível
+
+Comandos CUPS são interpretados com locale previsível:
+
+```text
+LC_ALL=C
+LANG=C
+LANGUAGE=C
+```
+
+Isso evita erros de parsing causados pela tradução da saída, como interpretar partes de mensagens (`or`, `pdftopdf`) como se fossem nomes de impressoras.
+
+## Aplicação instalada 2.x
+
+A linha gráfica continua usando:
+
+```text
+PySide6 / CLI
+      ↓
+serviços sem privilégio
+      ↓
+PolicyKit + helper enumerado
+      ↓
+CUPS / systemd / pacotes permitidos
+```
+
+O helper administrativo não aceita comandos livres. Operações privilegiadas são limitadas a um catálogo conhecido e os dados são validados antes da execução.
+
+## Credenciais
+
+Senhas não devem aparecer em linha de comando, log ou relatório. A base instalada inclui higienização de URIs, campos de senha, tokens e cabeçalhos de autorização.
+
+## Princípio de projeto
+
+A regra principal é:
+
+```text
+diagnosticar exatamente
+→ corrigir minimamente
+→ validar
+→ testar
+```
+
+Nunca:
+
+```text
+não sei o problema
+→ resetar tudo
+```

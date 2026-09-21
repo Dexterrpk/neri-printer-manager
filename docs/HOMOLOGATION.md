@@ -1,58 +1,81 @@
 # Homologação para produção
 
-Esta lista registra o que exige sistema ou hardware real. Testes automatizados não
-substituem a confirmação da folha impressa.
+Checklist do Neri Printer Manager, criado por **Cleiton Neri — Neri Infotech**.
 
-## Ambientes
+Testes automatizados ajudam a evitar regressões, mas não substituem impressora real, cabo, USB, driver e folha física.
 
-- [ ] Linux Mint 21.x / Python 3.10, instalação limpa.
-- [ ] Linux Mint 22.x / Python 3.12, instalação limpa.
-- [ ] Atualização da versão 1.5.0 pelo modo rápido.
-- [ ] Instalação por bootstrap com usuário administrador.
-- [ ] Uso por conta comum que autoriza com outra conta administrativa.
-- [ ] Instalação e remoção do `.deb` da arquitetura correspondente.
+## Modo portátil
 
-## Impressoras e origens
+- [x] Executa sem instalação permanente do aplicativo.
+- [x] Usa diretório temporário em `/tmp`.
+- [x] Remove os próprios arquivos temporários ao sair.
+- [x] O lançador aponta para uma revisão portátil fixa.
+- [x] Parsing de filas usa locale previsível.
+- [x] Mensagens como `pdftopdf ... exited with no errors` não viram filas falsas.
+- [x] Não contém rotina para alterar firewall, DNS, DHCP, gateway, rota, VLAN ou NetworkManager.
+- [x] Não contém rotina para administrar Zentyal.
+- [x] Não executa brute force ou descoberta de senha.
+- [x] Teste de rede é direcionado ao destino selecionado.
 
-- [ ] USB detectada, instalada e testada com driver do fabricante.
-- [ ] IPP/IPPS driverless instalada e com página física.
-- [ ] IPP sem suporte completo cai para PPD/PCL/PostScript.
-- [ ] JetDirect (`socket://IP:9100`) instalada e testada.
-- [ ] LPD (`lpd://IP/fila`) instalada e testada.
-- [ ] Mint→Mint enumera duas ou mais filas CUPS e instala a escolhida.
-- [ ] Windows→Mint com SMB anônimo, se a política do servidor permitir.
-- [ ] Windows→Mint com `usuario`, `PC\\usuario` e `DOMINIO\\usuario`.
-- [ ] Mint→Windows com fila CUPS/Samba e conta Samba autenticada.
-- [ ] Hostname DNS, `.local`, IP e NetBIOS.
-- [ ] IPv6 para IPP, JetDirect e LPD em ambiente compatível.
+## Diagnóstico
 
-## Operações
+- [ ] CUPS ativo.
+- [ ] CUPS parado.
+- [ ] `cupsd.conf` inválido.
+- [ ] `MaxJobs` inválido.
+- [ ] fila pausada.
+- [ ] fila recusando trabalhos.
+- [ ] `client-error-not-authorized`.
+- [ ] trabalho pendente.
+- [ ] `filter failed`.
+- [ ] erro de Ghostscript.
+- [ ] PPD ausente ou inválido.
+- [ ] backend ausente.
+- [ ] `Backend hp returned status 1`.
+- [ ] URI inválida.
+- [ ] PrintSpy rejeitando URI.
+- [ ] USB não localizado.
+- [ ] duas impressoras iguais com seriais diferentes.
+- [ ] destino de rede indisponível.
 
-- [ ] Listar somente filas realmente instaladas.
-- [ ] Mostrar `implicitclass://` apenas como publicação remota.
-- [ ] Bloquear colisão de nome sem alterar a fila existente.
-- [ ] Definir padrão, pausar, retomar e remover.
-- [ ] Enviar página de teste e cancelar um trabalho.
-- [ ] Compartilhar e descompartilhar somente a fila escolhida.
-- [ ] Cancelar a janela PolicyKit sem travar a interface.
-- [ ] Diagnosticar com CUPS ativo, parado e ausente.
-- [ ] Gerar HTML e ZIP sem credenciais reconhecíveis.
-- [ ] Criar backup em `$HOME` e mídia montada; validar SHA-256.
+## Correções
 
-## Segurança e estabilidade
+- [ ] correção altera somente a fila selecionada quando possível;
+- [ ] backup é criado antes de alteração relevante;
+- [ ] `cupsd -t` é executado antes de reiniciar após alteração global;
+- [ ] configuração inválida dispara rollback;
+- [ ] página de teste é enviada após reparo;
+- [ ] erro antigo de log não é apresentado como falha atual sem evidência recente.
 
-- [x] Nenhum uso de `shell=True` no código Python.
-- [x] Helper com operações, pacotes e serviços enumerados.
-- [x] Entradas malformadas e nomes de driver arbitrários rejeitados.
-- [x] Senha SMB fora de toda linha de comando (`pkexec` e `lpadmin`).
-- [x] Acesso irrestrito e administração remota explicitamente desativados no CUPS.
-- [x] CI executa Ruff, mypy, compileall e pytest.
-- [ ] Inspeção manual de `/proc` durante autenticação SMB.
-- [ ] Teste de concorrência trocando o destino do backup durante a criação.
-- [ ] Revisão do pacote com `lintian` na distribuição alvo.
+## Hardware para validar
+
+Prioridade de testes reais:
+
+- [ ] HP LaserJet P1102/P1102w;
+- [ ] HP LaserJet MFP 135a;
+- [ ] Brother HL-1200/1202;
+- [ ] Zebra ZD220/ZD230;
+- [ ] Bematech MP-4200 TH;
+- [ ] Epson USB;
+- [ ] impressora IPP;
+- [ ] impressora JetDirect 9100;
+- [ ] fila SMB Windows→Mint e Mint→Windows.
+
+## Segurança
+
+Confirmar manualmente que nenhuma correção:
+
+- [ ] modifica Zentyal;
+- [ ] abre ou fecha porta de firewall;
+- [ ] muda DNS, DHCP ou gateway;
+- [ ] altera rota ou interface de rede;
+- [ ] reinicia NetworkManager;
+- [ ] executa comando em outro host;
+- [ ] remove filas não selecionadas sem confirmação;
+- [ ] cancela todos os jobs sem confirmação.
 
 ## Critério de liberação
 
-Uma release só recebe a marca `stable` quando todos os itens aplicáveis ao escopo
-da release forem registrados em hardware real, a CI estiver verde e não houver
-falha crítica aberta. Até lá, o classificador do pacote permanece **Beta**.
+Uma versão deve ser considerada estável para uso amplo somente depois de passar pelos cenários aplicáveis em hardware real e não apresentar regressão crítica de CUPS, impressão ou segurança.
+
+A prioridade é sempre **segurança e previsibilidade antes de quantidade de recursos**.

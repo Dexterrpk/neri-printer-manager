@@ -1,166 +1,133 @@
 # Neri Printer Manager
 
-Gerenciador de impressoras para Linux Mint com descoberta, instalação,
-compartilhamento e diagnóstico em uma interface PySide6. A versão atual é **2.0.1**.
+Ferramenta criada por **Cleiton Neri — Neri Infotech** para diagnosticar e corrigir problemas de impressoras no Linux Mint de forma simples, segura e objetiva.
 
-O aplicativo cobre impressoras USB, equipamentos de rede/RJ45 e filas publicadas
-por Linux Mint ou Windows. A interface roda como usuário comum; somente as ações
-administrativas previamente autorizadas passam por PolicyKit.
+O projeto nasceu de situações reais de suporte: impressora instalada que não imprime, fila retida, CUPS quebrado, erro de filtro, HPLIP, backend USB, SMB e falhas difíceis de identificar apenas pela interface do sistema.
 
-![Tela inicial do Neri Printer Manager](docs/screenshots/overview.png)
+A ideia central é simples:
 
-## Cenários atendidos
+**diagnosticar → explicar → corrigir somente o necessário → validar → testar**.
 
-| Origem | Descoberta/conexão | Comportamento |
-|---|---|---|
-| USB local | Backend USB do CUPS | Identifica fabricante/modelo e prioriza o driver instalado mais compatível |
-| Impressora de rede | IP/hostname, IPP/IPPS, JetDirect e LPD | Prioriza IPP e testa alternativas seguras quando necessário |
-| Outro Linux Mint | Filas do CUPS remoto | Enumera as filas reais em `ipp://host:631/printers/fila` |
-| Windows/Samba | NetBIOS/DNS e SMB autenticado | Consulta os compartilhamentos sem gravar a senha em log |
-| Mint compartilhando | CUPS e Samba | Publica apenas a fila escolhida e mantém o acesso Samba autenticado |
+## Execução rápida — recomendada
 
-Também estão incluídos:
+Não precisa instalar o programa.
 
-- fila de trabalhos, cancelamento, pausa, retomada, impressora padrão e página de teste;
-- central de saúde com correções limitadas, confirmação e nova verificação;
-- relatório HTML, pacote ZIP de suporte com logs higienizados e backup com SHA-256;
-- CLI para suporte técnico e automação;
-- empacotamento `.deb`, ambiente de desenvolvimento e CI para Python 3.10/3.12.
-
-## Instalação no Linux Mint
-
-Se você baixou o pacote Debian, abra o terminal na pasta onde ele foi salvo e
-execute:
+No terminal do Linux Mint, como usuário normal, execute:
 
 ```bash
-sudo apt update
-sudo apt install ./neri-printer.deb
+curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/run.sh | bash
 ```
 
-O nome curto facilita a instalação; internamente, o pacote e os comandos
-continuam usando `neri-printer-manager`.
+O `run.sh` é apenas um lançador curto. Ele baixa uma revisão portátil fixa e auditada, executa em área temporária e remove os arquivos temporários ao sair.
 
-Para instalar diretamente pelo repositório, execute no terminal do usuário que
-utilizará o programa, sem abrir antes um shell root:
+A revisão atualmente fixada pelo lançador é:
+
+```text
+4dabceec7e43c8e9f20e690fa8266f1e9b4c22d6
+```
+
+Para executar diretamente essa revisão imutável:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/4dabceec7e43c8e9f20e690fa8266f1e9b4c22d6/portable/neri-printer-manager-portable.sh | bash
 ```
 
-Alternativa com `curl`:
+## O que a edição portátil faz
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash
-```
+- lista as filas reais do CUPS;
+- diagnostica CUPS, fila, permissão, URI, PPD, filtro, backend e comunicação;
+- reconhece falhas comuns como `client-error-not-authorized`, `filter failed`, `Backend hp returned status 1`, erros de Ghostscript, URI inválida e trabalhos pendentes;
+- trata HPLIP/HPCUPS quando há evidência de falha no backend HP;
+- testa somente o destino selecionado em impressoras de rede;
+- cria backup temporário antes de alterações relevantes;
+- valida o CUPS com `cupsd -t` antes de reiniciar;
+- faz rollback quando uma alteração de configuração não passa na validação;
+- envia página de teste para confirmar o resultado;
+- limpa os arquivos temporários do próprio programa ao encerrar.
 
-O bootstrap preserva uma cópia local com alterações ou histórico divergente. Ele
-só faz atualização *fast-forward* de uma `main` limpa; nos demais casos usa uma
-cópia temporária da versão oficial.
-
-Modos disponíveis:
-
-```bash
-# Atualiza reutilizando um ambiente íntegro
-wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --fast
-
-# Reinstala dependências e recria o ambiente
-wget -qO- https://raw.githubusercontent.com/Dexterrpk/neri-printer-manager/main/bootstrap.sh | bash -s -- --repair
-```
-
-Depois da instalação, abra normalmente como usuário comum:
-
-```bash
-neri-printer-manager
-neri-printer-cli --version
-```
-
-Quando uma operação exigir privilégios administrativos, o próprio aplicativo
-solicitará a senha pelo PolicyKit. Para diagnóstico ou suporte técnico, também é
-possível iniciar toda a interface como administrador:
-
-```bash
-sudo -H neri-printer-manager
-```
-
-O modo com `sudo` concede privilégio total à interface e, por isso, deve ser
-usado somente quando a execução normal não resolver o problema. A opção `-H`
-evita criar arquivos pertencentes ao root na pasta pessoal do usuário.
-
-Para remover uma instalação feita pelo bootstrap, execute
-`sudo ./uninstall.sh` dentro do projeto. Se tiver usado o pacote `.deb`, use
-`sudo apt remove neri-printer-manager`; as filas e configurações do CUPS são
-preservadas nos dois casos.
-
-O instalador não instala `cups-browsed`. Se esse serviço já estiver ativo por
-decisão da distribuição, suas filas `implicitclass://` são classificadas como
-publicações remotas e não aparecem em **Minhas impressoras**.
-
-## Uso rápido
-
-1. Para rede, digite o IP ou hostname na tela inicial.
-2. Para Windows, informe usuário e senha SMB somente quando solicitado.
-3. Confira a opção recomendada, escolha um nome local e instale.
-4. Para USB, abra **Ferramentas técnicas → USB**.
-5. Se algo falhar, abra **Corrigir problemas** e execute o diagnóstico completo.
-
-O [manual do usuário](docs/USER_GUIDE.md) detalha cada fluxo e as limitações.
+As correções aplicadas ao CUPS, driver ou fila permanecem, naturalmente. O que desaparece é apenas o programa portátil baixado para aquela execução.
 
 ## Segurança
 
-- Nenhum comando usa `shell=True`.
-- Nomes de fila, identificadores de driver, hostnames e URIs são validados duas vezes:
-  na aplicação e novamente após a elevação.
-- O helper PolicyKit aceita apenas um catálogo fixo de operações, pacotes e serviços.
-- A senha SMB segue por entrada padrão e pela API local do CUPS; não entra em
-  nenhuma linha de comando.
-- Logs e relatórios removem *userinfo*, senhas, tokens e cabeçalhos de autorização.
-- O compartilhamento CUPS usa a política de rede local e desativa explicitamente
-  acesso irrestrito e administração remota.
-- A interface nunca precisa ser executada como root nem concede `lpadmin` ao usuário.
+O Neri Printer Manager foi desenhado para cuidar de **impressão**, não para administrar a infraestrutura da rede.
 
-Consulte [SECURITY.md](SECURITY.md) e a
-[arquitetura](docs/ARCHITECTURE.md) para a fronteira de privilégio completa.
+O modo portátil não foi criado para alterar:
 
-## Desenvolvimento e validação
+- Zentyal;
+- firewall;
+- DNS;
+- DHCP;
+- gateway;
+- rotas;
+- VLAN;
+- NetworkManager;
+- interfaces de rede;
+- roteadores, switches ou outros servidores;
+- computadores remotos.
 
-```bash
-sudo apt install python3-cups
-python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install -e '.[dev]'
-QT_QPA_PLATFORM=offscreen .venv/bin/pytest -q
-.venv/bin/ruff format --check .
-.venv/bin/ruff check .
-.venv/bin/mypy src
+Também não faz brute force, não tenta descobrir senhas e não executa varredura agressiva da rede.
+
+Quando precisa verificar uma impressora de rede, o teste é direcionado somente ao endereço daquela impressora e às portas normais de impressão.
+
+Consulte [SECURITY.md](SECURITY.md) para os limites completos.
+
+## Filosofia de diagnóstico
+
+O sistema não deve usar a abordagem:
+
+```text
+não sei o problema
+→ reinstalar tudo
+→ resetar tudo
 ```
 
-Ou execute tudo com:
+A abordagem correta é:
+
+```text
+coletar evidências
+→ identificar a causa
+→ aplicar a menor correção possível
+→ validar
+→ testar impressão
+```
+
+Um exemplo real atendido pelo projeto foi uma HP LaserJet P1102w em que a fila e o filtro estavam funcionando, mas o log mostrava:
+
+```text
+Backend hp returned status 1 (failed)
+```
+
+O diagnóstico correto era falha no backend HPLIP, e não simplesmente "impressora retida".
+
+## Versão com interface gráfica
+
+O repositório também mantém a linha instalada com interface PySide6, CLI, PolicyKit, descoberta de rede e recursos adicionais. A versão empacotada atual dessa linha é **2.0.1**.
+
+Ela continua disponível para ambientes em que uma instalação permanente faça sentido, mas para suporte rápido em máquinas Linux Mint a **edição portátil é a opção recomendada**.
+
+## Documentação
+
+- [Autoria](AUTHORS.md)
+- [Manual de uso](docs/USER_GUIDE.md)
+- [Arquitetura](docs/ARCHITECTURE.md)
+- [Solução de problemas](docs/TROUBLESHOOTING.md)
+- [Homologação](docs/HOMOLOGATION.md)
+- [Segurança](SECURITY.md)
+- [Histórico de mudanças](CHANGELOG.md)
+
+## Desenvolvimento
+
+A base Python pode ser validada com:
 
 ```bash
 bash scripts/validate.sh
 ```
 
-Para gerar o pacote Debian:
+Os testes automatizados cobrem validação de entradas, descoberta, segurança, parsing de saídas do CUPS e outras regressões conhecidas. A confirmação final de uma impressão ainda depende de hardware real, driver compatível e estado físico do equipamento.
 
-```bash
-bash scripts/build_deb.sh
-```
+## Autor
 
-O artefato é criado em `build/` com a versão do `pyproject.toml` e a
-arquitetura informada por `dpkg`.
-
-## Estado de liberação
-
-Os testes automatizados cobrem validação, descoberta, seleção de protocolo,
-instalação, higienização e fronteira administrativa. A confirmação final de
-impressão exige hardware real, driver compatível e as políticas da rede/servidor.
-A matriz obrigatória está em [docs/HOMOLOGATION.md](docs/HOMOLOGATION.md).
-
-## Documentação
-
-- [Manual do usuário](docs/USER_GUIDE.md)
-- [Arquitetura e fluxo de dados](docs/ARCHITECTURE.md)
-- [Solução de problemas](docs/TROUBLESHOOTING.md)
-- [Homologação em hardware real](docs/HOMOLOGATION.md)
-- [Histórico de mudanças](CHANGELOG.md)
+**Criado e mantido por Cleiton Neri — Neri Infotech**  
+GitHub: `Dexterrpk`
 
 Licenciado sob a [MIT License](LICENSE).
